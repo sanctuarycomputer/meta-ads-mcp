@@ -48,9 +48,12 @@ function oneLine(s: string): string {
 
 export class GuardRunner {
   private readonly env: NodeJS.ProcessEnv;
-  private readonly cwd: string;
-  private readonly timeoutMs: number;
-  private readonly maxOutputBytes: number;
+  /** Working directory the guard runs in (contract §2: `/app`). */
+  readonly cwd: string;
+  /** The guard is killed (SIGKILL) after this many ms (contract §2: 20 s). */
+  readonly timeoutMs: number;
+  /** stdout or stderr past this many bytes refuses as `output`. */
+  readonly maxOutputBytes: number;
 
   constructor(opts: GuardRunnerOptions = {}) {
     this.env = opts.env ?? process.env;
@@ -81,7 +84,7 @@ export class GuardRunner {
       if (reply.v === CONTRACT_VERSION && reply.ack === true && typeof reply.receipt === "string" && reply.receipt !== "") {
         return null;
       }
-      return `guard outcome record for ${o.outcome_for} was not acknowledged`;
+      return oneLine(`guard outcome record for ${o.outcome_for} was not acknowledged`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return oneLine(`guard outcome record for ${o.outcome_for} was not acknowledged: ${msg}`);
@@ -135,6 +138,8 @@ export class GuardRunner {
             const text = stdout.endsWith("\n") ? stdout.slice(0, -1) : stdout;
             if (text === "") return fail(refuse("output", "exit 0 with no reply line"));
             if (text.includes("\n")) return fail(refuse("output", "the reply is more than one line"));
+            // Exactly `<json>` or `<json>\n`: no \r, no surrounding whitespace (JSON.stringify never prints any).
+            if (text !== text.trim()) return fail(refuse("output", "the reply line has surrounding whitespace"));
             let parsed: unknown;
             try {
               parsed = JSON.parse(text);

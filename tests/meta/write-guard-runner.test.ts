@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -200,6 +200,68 @@ describe("GuardRunner.decide", () => {
     });
   });
 
+  it("runs the guard in the given cwd", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "guard-cwd-")));
+    try {
+      const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: "/h", META_WRITE_GUARD_CMD: stub("cwd") };
+      const r = await new GuardRunner({ env, cwd: dir }).decide(DESCRIPTOR);
+      expect(r.receipt).toBe(dir);
+      expect(dir).not.toBe(realpathSync(process.cwd()));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("output cap: a reply at maxOutputBytes allows, one byte over → output (below Node's own 1 MiB default)", async () => {
+    await expect(runner(stub("pad", "1024"), { maxOutputBytes: 1024 }).decide(DESCRIPTOR)).resolves.toMatchObject({
+      receipt: "pad-receipt",
+    });
+    expect(await refusal(runner(stub("pad", "1025"), { maxOutputBytes: 1024 }).decide(DESCRIPTOR))).toBe(
+      "write refused: guard output: the guard wrote more than 1024 bytes",
+    );
+    expect(await refusal(runner(stub("pad", "4096"), { maxOutputBytes: 1024 }).decide(DESCRIPTOR))).toMatch(
+      /^write refused: guard output: /,
+    );
+  });
+
+  it("the default output cap is 65_536 bytes, enforced", async () => {
+    await expect(runner(stub("pad", "65536")).decide(DESCRIPTOR)).resolves.toMatchObject({ receipt: "pad-receipt" });
+    expect(await refusal(runner(stub("pad", "65537")).decide(DESCRIPTOR))).toMatch(/^write refused: guard output: /);
+  });
+
+  it.each([
+    ["a trailing \\r", (l: string) => l + "\r\n"],
+    ["a trailing \\r without \\n", (l: string) => l + "\r"],
+    ["leading spaces", (l: string) => "  " + l + "\n"],
+    ["a trailing space and tab", (l: string) => l + " \t\n"],
+    ["a blank line before", (l: string) => "\n" + l + "\n"],
+    ["two trailing newlines", (l: string) => l + "\n\n"],
+  ])("strict line: %s → output", async (_name, wrap) => {
+    expect(await refusal(runner(replying(wrap(JSON.stringify(ALLOW_LINE)))).decide(DESCRIPTOR))).toMatch(
+      /^write refused: guard output: /,
+    );
+  });
+
+  it("a guard stopped by a signal the runner did not send → exit, even after an allow line", async () => {
+    expect(await refusal(runner(stub("selfkill")).decide(DESCRIPTOR))).toBe(
+      "write refused: guard exit: the guard was stopped by SIGKILL",
+    );
+  });
+
+  it("a denied reply whose reason is not a string → the fallback text", async () => {
+    const msg = await refusal(
+      runner(replying(line({ v: "1.0", allow: false, reason: 5, basis: null, receipt: "r" }))).decide(DESCRIPTOR),
+    );
+    expect(msg).toBe("write refused: guard denied: the guard did not allow the write");
+  });
+
+  it("an allow line printed, then a hang → timeout, never an allow", async () => {
+    const start = Date.now();
+    const msg = await refusal(runner(stub("reply-then-hang"), { timeoutMs: 500 }).decide(DESCRIPTOR));
+    expect(Date.now() - start).toBeLessThan(2_000);
+    expect(msg).toMatch(/^write refused: guard timeout: /);
+  });
+
   it("flood → output", async () => {
     expect(await refusal(runner(stub("flood")).decide(DESCRIPTOR))).toMatch(/^write refused: guard output: /);
   });
@@ -225,6 +287,39 @@ describe("GuardRunner.decide", () => {
   });
 });
 
+describe("GuardRunner defaults", () => {
+  it("cwd /app, timeout 20_000 ms, output cap 65_536 bytes", () => {
+    const r = new GuardRunner();
+    expect(r.cwd).toBe("/app");
+    expect(r.timeoutMs).toBe(20_000);
+    expect(r.maxOutputBytes).toBe(65_536);
+  });
+
+  it("options override each default", () => {
+    const r = new GuardRunner({ cwd: "/x", timeoutMs: 5, maxOutputBytes: 7 });
+    expect([r.cwd, r.timeoutMs, r.maxOutputBytes]).toEqual(["/x", 5, 7]);
+  });
+});
+
+describe("the child_process grant (execFile only)", () => {
+  const src = readFileSync(join(ROOT, "src/meta/write-guard.ts"), "utf8");
+
+  it("imports exactly { execFile } from node:child_process, once, and nothing else of it", () => {
+    const mentions = src.match(/child_process/g) ?? [];
+    const imports = [...src.matchAll(/^import\s*\{([^}]*)\}\s*from\s*"node:child_process";$/gm)];
+    expect(imports).toHaveLength(1);
+    expect(mentions).toHaveLength(1);
+    expect(imports[0][1].split(",").map((n) => n.trim()).filter(Boolean)).toEqual(["execFile"]);
+  });
+
+  it("uses no shell option and no other process API", () => {
+    expect(src).not.toMatch(/\bshell\s*:/);
+    expect(src).not.toMatch(/\b(execSync|execFileSync|spawnSync|spawn|fork|exec)\s*\(/);
+    expect(src).not.toMatch(/\brequire\s*\(/);
+    expect(src).not.toMatch(/\bimport\s*\(/);
+  });
+});
+
 describe("GuardRunner.sendOutcome", () => {
   it("an ack → null", async () => {
     await expect(runner(stub("allow")).sendOutcome(OUTCOME)).resolves.toBeNull();
@@ -232,6 +327,15 @@ describe("GuardRunner.sendOutcome", () => {
 
   it("a non-ack → a one-line warning", async () => {
     const w = await runner(replying(line({ v: "1.0", ack: false, receipt: "r" }))).sendOutcome(OUTCOME);
+    expect(w).toEqual(expect.any(String));
+    expect(w).not.toContain("\n");
+  });
+
+  it("a non-ack for an outcome_for holding a newline → still one line", async () => {
+    const w = await runner(replying(line({ v: "1.0", ack: false, receipt: "r" }))).sendOutcome({
+      ...OUTCOME,
+      outcome_for: "a\nb",
+    });
     expect(w).toEqual(expect.any(String));
     expect(w).not.toContain("\n");
   });
