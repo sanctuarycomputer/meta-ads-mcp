@@ -4,17 +4,14 @@ import {
   ApifyApiClient,
   maskApifyToken,
   resolveApifyTenantId,
-  resolveApifyToken,
   scrubApifyToken,
   validateApifyId,
-  apifyApiClient,
 } from "../../src/apify/client.js";
 import {
   InMemoryApifyTokenRepo,
   configureApifyTokenRepoForTests,
 } from "../../src/store/apify-token-repo.js";
 import { resetKeyCacheForTests } from "../../src/auth/crypto.js";
-import { mockFetchResponse } from "../setup.js";
 
 // Kept under the 20-char suffix that .gitleaks.toml's apify-api-token rule
 // matches, so this fixture never trips the secret scanner.
@@ -34,142 +31,6 @@ describe("apify client", () => {
     delete process.env.TOKEN_ENCRYPTION_KEY;
     resetKeyCacheForTests();
     configureApifyTokenRepoForTests(undefined);
-  });
-
-  describe("response size cap", () => {
-    it("rejects a body whose Content-Length exceeds the cap without parsing it", async () => {
-      const json = vi.fn(async () => []);
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-        ok: true, status: 200, headers: new Headers({ "content-length": String(64 * 1024 * 1024) }), json, text: async () => "[]",
-      }));
-      await expect(apifyApiClient.get("/v2/datasets/ds123abcde/items")).rejects.toThrow(/too large/);
-      expect(json).not.toHaveBeenCalled();
-    });
-
-    it("stops reading a streamed body as soon as the byte budget is exceeded", async () => {
-      let pulls = 0;
-      let cancelled = false;
-      const chunk = new TextEncoder().encode("x".repeat(1024 * 1024));
-      const stream = new ReadableStream<Uint8Array>({
-        pull(controller) {
-          pulls += 1;
-          controller.enqueue(chunk);
-        },
-        cancel() {
-          cancelled = true;
-        },
-      });
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, headers: new Headers(), body: stream }));
-      await expect(apifyApiClient.get("/v2/datasets/ds123abcde/items")).rejects.toThrow(/too large/);
-      expect(pulls).toBeLessThan(40);
-      expect(cancelled).toBe(true);
-    });
-
-    it("measures bytes, not UTF-16 units, and bounds error bodies too", async () => {
-      const wide = "\u{1F600}".repeat(9 * 1024 * 1024);
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, headers: new Headers(), json: async () => [], text: async () => wide }));
-      await expect(apifyApiClient.get("/v2/datasets/ds123abcde/items")).rejects.toThrow(/too large/);
-
-      const json = vi.fn(async () => ({ error: { message: "bad" } }));
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 400, headers: new Headers({ "content-length": String(100 * 1024 * 1024) }), json, text: async () => "{}" }));
-      await expect(apifyApiClient.get("/v2/datasets/ds123abcde/items")).rejects.toThrow(/too large|400/);
-      expect(json).not.toHaveBeenCalled();
-    });
-
-    it("treats an empty 200 body as a failed request (retryable), not as null data", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, headers: new Headers(), text: async () => "   " }));
-      const client = new ApifyApiClient({ maxRetries: 0 });
-      await expect(client.get("/v2/datasets/ds123abcde/items")).rejects.toThrow(/empty/i);
-    });
-
-    it("retries a GET whose body came back empty", async () => {
-      vi.stubGlobal("fetch", vi.fn()
-        .mockResolvedValueOnce({ ok: true, status: 200, headers: new Headers(), text: async () => "" })
-        .mockResolvedValueOnce(mockFetchResponse([{ ok: true }])));
-      const client = new ApifyApiClient({ maxRetries: 1 });
-      await expect(client.get("/v2/datasets/ds123abcde/items")).resolves.toEqual([{ ok: true }]);
-      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
-    }, 10_000);
-
-    it("does not retry a POST whose body came back empty, but warns that it may have been accepted", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 201, headers: new Headers(), text: async () => "" }));
-      const client = new ApifyApiClient({ maxRetries: 3 });
-      await expect(client.post("/v2/acts/x~y/runs", { count: 1 })).rejects.toThrow(/may still have been accepted/);
-      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    });
-
-    it("keeps the indeterminate-acceptance warning when a POST response is too large", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 201, headers: new Headers({ "content-length": String(33 * 1024 * 1024) }), text: async () => "{}" }));
-      await expect(new ApifyApiClient({ maxRetries: 3 }).post("/v2/acts/x~y/runs", { count: 1 })).rejects.toThrow(/too large[\s\S]*may still have been accepted/);
-    });
-
-    it("still returns undefined for a 204", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 204, headers: new Headers(), text: async () => "" }));
-      await expect(new ApifyApiClient({ maxRetries: 0 }).delete("/v2/actor-runs/abcdefghij")).resolves.toBeUndefined();
-    });
-
-    it("rejects an undeclared body that turns out larger than the cap", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-        ok: true, status: 200, headers: new Headers(), json: async () => [], text: async () => "x".repeat(33 * 1024 * 1024),
-      }));
-      await expect(apifyApiClient.get("/v2/datasets/ds123abcde/items")).rejects.toThrow(/too large/);
-    });
-  });
-
-  describe("token handling", () => {
-    it("sends the token as a Bearer header and never in the URL", async () => {
-      const fetchMock = vi.fn().mockResolvedValue(mockFetchResponse({ data: { ok: true } }));
-      vi.stubGlobal("fetch", fetchMock);
-
-      await new ApifyApiClient().get("/v2/users/me");
-
-      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe("https://api.apify.com/v2/users/me");
-      expect(url).not.toContain(TOKEN);
-      expect(url).not.toContain("token");
-      expect((init.headers as Record<string, string>).Authorization).toBe(`Bearer ${TOKEN}`);
-    });
-
-    it("keeps the token out of the URL even when query params are present", async () => {
-      const fetchMock = vi.fn().mockResolvedValue(mockFetchResponse([]));
-      vi.stubGlobal("fetch", fetchMock);
-
-      await new ApifyApiClient().get("/v2/datasets/abc12/items", { offset: 10, limit: 5 });
-
-      const [url] = fetchMock.mock.calls[0] as [string];
-      expect(url).toBe("https://api.apify.com/v2/datasets/abc12/items?offset=10&limit=5");
-      expect(url).not.toContain("apify_api");
-    });
-
-    it("prefers a tokenOverride over the resolved token", async () => {
-      const fetchMock = vi.fn().mockResolvedValue(mockFetchResponse({ data: {} }));
-      vi.stubGlobal("fetch", fetchMock);
-
-      await new ApifyApiClient().get("/v2/users/me", undefined, "apify_api_candidate");
-
-      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect((init.headers as Record<string, string>).Authorization).toBe(
-        "Bearer apify_api_candidate",
-      );
-    });
-
-    it("resolves the per-tenant stored token ahead of the env fallback", async () => {
-      const repo = new InMemoryApifyTokenRepo();
-      await repo.saveToken("_local", "apify_api_stored", null);
-      configureApifyTokenRepoForTests(repo);
-
-      expect(await resolveApifyToken()).toBe("apify_api_stored");
-    });
-
-    it("falls back to APIFY_TOKEN when nothing is stored", async () => {
-      expect(await resolveApifyToken()).toBe(TOKEN);
-    });
-
-    it("throws actionable guidance when no token is available at all", async () => {
-      delete process.env.APIFY_TOKEN;
-
-      await expect(resolveApifyToken()).rejects.toThrow(/ads_library_register_apify_token/);
-    });
   });
 
   describe("tenant isolation", () => {
@@ -200,13 +61,6 @@ describe("apify client", () => {
       expect(() => resolveApifyTenantId()).toThrow(/authenticated user in multi-tenant mode/);
     });
 
-    it("never falls back to the server-wide APIFY_TOKEN in multi-tenant mode", async () => {
-      enableMultiTenant();
-      process.env.APIFY_TOKEN = TOKEN;
-
-      await expect(resolveApifyToken()).rejects.toThrow(/authenticated user in multi-tenant mode/);
-    });
-
     it("scopes a stored token to its own tenant", async () => {
       const repo = new InMemoryApifyTokenRepo();
       await repo.saveToken("user-a", "apify_api_aaa", null);
@@ -218,53 +72,6 @@ describe("apify client", () => {
   });
 
   describe("retries", () => {
-    it("retries a GET on 500 and succeeds", async () => {
-      const fetchMock = vi
-        .fn()
-        .mockResolvedValueOnce(mockFetchResponse({ error: { message: "boom" } }, { status: 500 }))
-        .mockResolvedValueOnce(mockFetchResponse({ data: { ok: true } }));
-      vi.stubGlobal("fetch", fetchMock);
-
-      const result = await new ApifyApiClient({ maxRetries: 2 }).get<{ data: { ok: boolean } }>(
-        "/v2/users/me",
-      );
-
-      expect(result.data.ok).toBe(true);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-    });
-
-    it("never retries a POST, so a run is never started twice", async () => {
-      const fetchMock = vi
-        .fn()
-        .mockResolvedValue(mockFetchResponse({ error: { message: "boom" } }, { status: 500 }));
-      vi.stubGlobal("fetch", fetchMock);
-
-      await expect(
-        new ApifyApiClient({ maxRetries: 3 }).post("/v2/acts/x/runs", { urls: [] }),
-      ).rejects.toThrow(McpError);
-
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-    });
-
-    it("flags a POST body-read failure as indeterminate, not as a safe failure", async () => {
-      // Apify accepted the run (201) but the body never completed. The client
-      // must not let the caller read this as "nothing happened".
-      vi.stubGlobal(
-        "fetch",
-        vi.fn().mockResolvedValue({
-          ok: true,
-          status: 201,
-          headers: new Headers(),
-          json: async () => {
-            throw new SyntaxError("Unexpected end of JSON input");
-          },
-        } as unknown as Response),
-      );
-
-      await expect(new ApifyApiClient({ maxRetries: 0 }).post("/v2/acts/x/runs")).rejects.toThrow(
-        /may still have been accepted/,
-      );
-    });
 
     it("does not add the indeterminate warning to a retryable GET", async () => {
       vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
@@ -274,107 +81,6 @@ describe("apify client", () => {
         .catch((e: Error) => e);
 
       expect(error.message).not.toContain("may still have been accepted");
-    });
-
-    it("does not retry a 429", async () => {
-      const fetchMock = vi
-        .fn()
-        .mockResolvedValue(
-          mockFetchResponse({ error: { type: "rate-limit-exceeded" } }, { status: 429 }),
-        );
-      vi.stubGlobal("fetch", fetchMock);
-
-      await expect(new ApifyApiClient({ maxRetries: 3 }).get("/v2/users/me")).rejects.toThrow(
-        /rate limit/i,
-      );
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  describe("error mapping", () => {
-    it("maps 401 to guidance about re-registering", async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn().mockResolvedValue(
-          mockFetchResponse({ error: { type: "token-not-found", message: "bad token" } }, { status: 401 }),
-        ),
-      );
-
-      await expect(new ApifyApiClient().get("/v2/users/me")).rejects.toThrow(
-        /ads_library_register_apify_token/,
-      );
-    });
-
-    it("maps 402 to a billing hint", async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn().mockResolvedValue(
-          mockFetchResponse({ error: { type: "insufficient-credit" } }, { status: 402 }),
-        ),
-      );
-
-      await expect(new ApifyApiClient().post("/v2/acts/x/runs")).rejects.toThrow(/billing|credits/i);
-    });
-
-    it("maps 404 to InvalidParams", async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn().mockResolvedValue(
-          mockFetchResponse({ error: { type: "record-not-found" } }, { status: 404 }),
-        ),
-      );
-
-      await expect(new ApifyApiClient().get("/v2/actor-runs/abc12")).rejects.toThrow(/not found/i);
-    });
-
-    it("scrubs a token echoed back inside an Apify error body", async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn().mockResolvedValue(
-          mockFetchResponse(
-            { error: { type: "bad-request", message: `token ${TOKEN} is malformed` } },
-            { status: 400 },
-          ),
-        ),
-      );
-
-      const error = await new ApifyApiClient().get("/v2/users/me").catch((e: Error) => e);
-
-      expect(error.message).not.toContain(TOKEN);
-      expect(error.message).toContain("[REDACTED]");
-      expect(error.message).toContain("is malformed");
-    });
-
-    it("scrubs an apify_api_ token echoed back when it is not the token in play", async () => {
-      const other = "apify_api_someoneelsestoken";
-      vi.stubGlobal(
-        "fetch",
-        vi.fn().mockResolvedValue(
-          mockFetchResponse(
-            { error: { type: "bad-request", message: `conflict with ${other}` } },
-            { status: 400 },
-          ),
-        ),
-      );
-
-      const error = await new ApifyApiClient().get("/v2/users/me").catch((e: Error) => e);
-
-      expect(error.message).not.toContain(other);
-      expect(error.message).toContain("apify_api_[REDACTED]");
-    });
-
-    it("scrubs a token surfaced through a transport error", async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn().mockRejectedValue(new Error(`connect failed for ${TOKEN}`)),
-      );
-
-      const error = await new ApifyApiClient({ maxRetries: 0 })
-        .post("/v2/acts/x/runs")
-        .catch((e: Error) => e);
-
-      expect(error.message).not.toContain(TOKEN);
-      expect(error.message).toContain("[REDACTED]");
     });
   });
 

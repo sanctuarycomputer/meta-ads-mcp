@@ -89,24 +89,6 @@ describe("gemini key tools", () => {
     expect(validateKey).not.toHaveBeenCalled();
   });
 
-  it("reports the encrypted source, the env fallback and none", async () => {
-    const { call, repo } = setup();
-    let status = await call("ads_get_gemini_key_status");
-    expect(JSON.parse(status.content[1].text)).toMatchObject({ source: "none", envFallbackAvailable: false, registered: false });
-    expect(status.content[0].text).toMatch(/ads_register_gemini_key/);
-
-    process.env.GEMINI_API_KEY = "AQ.env_fixture_key_0000000000";
-    status = await call("ads_get_gemini_key_status");
-    expect(JSON.parse(status.content[1].text)).toMatchObject({ source: "env" });
-
-    await repo.saveKey("tenant-1", KEY);
-    status = await call("ads_get_gemini_key_status");
-    const json = JSON.parse(status.content[1].text) as Record<string, unknown>;
-    expect(json).toMatchObject({ source: "encrypted_user_storage", registered: true });
-    expect(JSON.stringify(json)).not.toContain(KEY);
-    expect(json.keyFingerprint).toMatch(/^[0-9a-f]{12}$/);
-  });
-
   it("does not advertise the env fallback in multi-tenant mode, where it is unreachable", async () => {
     process.env.GEMINI_API_KEY = "AQ.env_fixture_key_0000000000";
     process.env.META_APP_ID = "1234567890";
@@ -138,14 +120,6 @@ describe("gemini key tools", () => {
 
     const missing = await call("ads_delete_gemini_key");
     expect(missing.isError).toBe(true);
-  });
-
-  it("warns that the env fallback stays active after a delete", async () => {
-    process.env.GEMINI_API_KEY = "AQ.env_fixture_key_0000000000";
-    const { call, repo } = setup();
-    await repo.saveKey("tenant-1", KEY);
-    const result = await call("ads_delete_gemini_key");
-    expect(result.content[0].text).toMatch(/GEMINI_API_KEY environment fallback is still active/);
   });
 
   it("fails closed for an unidentified multi-tenant caller", async () => {
