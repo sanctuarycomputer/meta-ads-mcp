@@ -10,20 +10,22 @@
  *      POST /act_<n>/insights, shown three ways:
  *      - a runtime probe of each handler, with argument sets built from its
  *        schema and two stub answers;
- *      - a static check of each read tool's registration block, and of the
- *        functions in the same file it calls, one level deep;
+ *      - a static check, on the TypeScript syntax tree, of each read tool's
+ *        registerTool call and of every function in the same file it names,
+ *        followed transitively;
  *      - the read tools' names, pinned.
  *      What this doesn't prove: a write reached only through a function in
  *      another module (other than the known write helpers), or only by a
- *      response shape or argument combination the probe doesn't build, or by
- *      calling the client through a name the static check doesn't know (it
- *      refuses any alias of metaApiClient in these files). On the read server,
+ *      response shape or argument combination the probe doesn't build. The
+ *      static check refuses any use of the client other than a member access
+ *      on its imported name, so no alias hides a call. On the read server,
  *      253's client method allowlist (META_ADS_READ_ONLY=1) is the runtime
  *      backstop.
  */
 import { readFileSync } from "node:fs";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { z } from "zod";
+import ts from "typescript";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { TOOL_GROUPS, EXCLUDED_TOOLS, ToolsetError, resolveToolsets, registerToolsets } from "../../src/tools/index.js";
 import { registerVideoAnalysisTools } from "../../src/tools/video-analysis.js";
@@ -440,96 +442,111 @@ describe("read tools send only GET or POST /act_<n>/insights (check 2.2, runtime
 });
 
 // ─── 2.2, static: read tools' blocks call no client write method or write helper ───
+// Parsed with the TypeScript compiler, so types, generics, regex and template
+// literals, comments and multi-line expressions are read as the compiler reads them.
 
-const WRITE_CALL = /metaApiClient\s*\??\.\s*(post|postForm|postMultipart|delete|execute)\b/;
-
-/** Every use of metaApiClient other than its import must be a member access, so no alias can carry it out of sight. */
-function aliases(text: string): string[] {
-  const body = text.replace(/^import[^;]*;/gm, "");
-  const out: string[] = [];
-  for (const m of body.matchAll(/\bmetaApiClient\b/g)) {
-    if (!/^\s*\??\.\s*\w/.test(body.slice(m.index + m[0].length))) out.push(body.slice(Math.max(0, m.index - 30), m.index + 40));
-  }
-  return out;
-}
+const WRITE_METHODS = new Set(["post", "postForm", "postMultipart", "delete", "execute"]);
 
 function exportedFunctions(rel: string): string[] {
   return [...source(rel).matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1]);
 }
-const WRITE_HELPERS = [...exportedFunctions("meta/post-edit.ts"), ...exportedFunctions("meta/creative-rebuild.ts")];
+const WRITE_HELPERS = new Set([...exportedFunctions("meta/post-edit.ts"), ...exportedFunctions("meta/creative-rebuild.ts")]);
+
+const parse = (text: string) => ts.createSourceFile("f.ts", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+
+function walk(node: ts.Node, visit: (n: ts.Node) => void): void {
+  visit(node);
+  ts.forEachChild(node, (c) => walk(c, visit));
+}
+
+const insideImport = (n: ts.Node): boolean => {
+  for (let p: ts.Node | undefined = n; p; p = p.parent) if (ts.isImportDeclaration(p)) return true;
+  return false;
+};
 
 /**
- * Index just past the bracket that closes the one at `open`, skipping strings,
- * template literals (their ${...} parts are scanned as code) and comments.
+ * Every use of the client other than `metaApiClient.x` / `metaApiClient?.x` on
+ * its imported name: renamed or namespace imports of it, casts, arguments,
+ * destructuring, element access, shorthand properties. Any of these could carry
+ * the client out of the static check's sight, so each is refused.
  */
-function matchClose(text: string, open: number): number {
-  const closer: Record<string, string> = { "(": ")", "{": "}", "[": "]" };
-  const stack: string[] = [];
-  for (let i = open; i < text.length; i++) {
-    const c = text[i];
-    const top = stack[stack.length - 1];
-    if (top === "`") {
-      if (c === "\\") i++;
-      else if (c === "`") stack.pop();
-      else if (c === "$" && text[i + 1] === "{") { stack.push("}"); i++; }
-      continue;
+function aliases(text: string): string[] {
+  const sf = parse(text);
+  const out: string[] = [];
+  walk(sf, (n) => {
+    if (ts.isImportSpecifier(n) && (n.propertyName ?? n.name).text === "metaApiClient" && n.name.text !== "metaApiClient") {
+      out.push(n.getText());
+    } else if (ts.isNamespaceImport(n) && /meta\/client(\.js)?["']$/.test(n.parent.parent.moduleSpecifier.getText())) {
+      out.push(n.getText());
+    } else if (ts.isIdentifier(n) && n.text === "metaApiClient" && !insideImport(n)) {
+      const p = n.parent;
+      if (!(ts.isPropertyAccessExpression(p) && p.expression === n)) out.push(p.getText().slice(0, 80));
     }
-    if (c === "/" && text[i + 1] === "/") { i = text.indexOf("\n", i); if (i === -1) return text.length; continue; }
-    if (c === "/" && text[i + 1] === "*") { i = text.indexOf("*/", i + 2) + 1; if (i === 0) return text.length; continue; }
-    if (c === "'" || c === '"') {
-      for (i++; i < text.length && text[i] !== c; i++) if (text[i] === "\\") i++;
-      continue;
-    }
-    if (c === "`") { stack.push("`"); continue; }
-    if (c in closer) stack.push(closer[c]);
-    else if (c === ")" || c === "}" || c === "]") {
-      if (stack.pop() !== c) return text.length;
-      if (stack.length === 0) return i + 1;
-    }
-  }
-  return text.length;
-}
-
-/** The text of a function from its definition at `at` to the end of its body (braced or expression). */
-function functionBody(text: string, at: number): string {
-  const head = /=>\s*|\)\s*(?::[^{=]+)?\{|\{/g;
-  head.lastIndex = at;
-  const m = head.exec(text);
-  if (!m) return text.slice(at);
-  if (m[0].startsWith("=>") && text[m.index + m[0].length] !== "{") {
-    // expression body: to the end of the statement
-    let i = m.index + m[0].length;
-    for (; i < text.length && text[i] !== ";" && text[i] !== "\n"; i++) {
-      if ("({[".includes(text[i])) i = matchClose(text, i) - 1;
-    }
-    return text.slice(at, i);
-  }
-  const brace = text.indexOf("{", m.index + (m[0].startsWith("=>") ? 2 : 0));
-  return text.slice(at, matchClose(text, brace));
-}
-
-const KEYWORDS = new Set(["if", "for", "while", "switch", "catch", "function", "return", "await", "typeof", "new"]);
-
-/** Functions defined anywhere in a file: declarations, arrow and function expressions, object methods. */
-function fileFunctions(text: string): Map<string, string> {
-  const out = new Map<string, string>();
-  const defs = /\bfunction\s+(\w+)\s*[<(]|\b(?:const|let|var)\s+(\w+)\s*(?::[^=]+)?=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*(?::[^=]+)?=>|\w+\s*=>)|^[ \t]*(?:async\s+)?(\w+)\s*\([^)]*\)\s*(?::[^{]+)?\{/gm;
-  for (const m of text.matchAll(defs)) {
-    const name = m[1] ?? m[2] ?? m[3];
-    if (KEYWORDS.has(name) || /^register\w*Tools$/.test(name)) continue;
-    out.set(name, (out.get(name) ?? "") + functionBody(text, m.index));
-  }
+  });
   return out;
 }
 
-/** Each tool's registration call in a file, by tool name: the whole registerTool(...) argument list. */
-function blocks(text: string): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const m of text.matchAll(/\bregisterTool\(/g)) {
-    const open = m.index + m[0].length - 1;
-    const call = text.slice(open, matchClose(text, open));
-    const name = /^\(\s*["'`](\w+)["'`]/.exec(call)?.[1];
-    if (name) out.set(name, call);
+/** Client write calls and write-helper references inside a node. */
+function writesIn(node: ts.Node): string[] {
+  const out: string[] = [];
+  walk(node, (n) => {
+    if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === "metaApiClient" && WRITE_METHODS.has(n.name.text)) {
+      out.push(n.getText());
+    } else if (ts.isIdentifier(n) && WRITE_HELPERS.has(n.text)) {
+      out.push(n.text);
+    }
+  });
+  return out;
+}
+
+const isFunctionValue = (e: ts.Expression | undefined): boolean => {
+  let cur = e;
+  while (cur && (ts.isParenthesizedExpression(cur) || ts.isAsExpression(cur) || ts.isSatisfiesExpression(cur))) cur = cur.expression;
+  return !!cur && (ts.isArrowFunction(cur) || ts.isFunctionExpression(cur));
+};
+
+/** Every function in a file by name: declarations, function-valued variables, properties and methods. */
+function fileFunctions(text: string): Map<string, ts.Node[]> {
+  const out = new Map<string, ts.Node[]>();
+  const add = (name: ts.Node | undefined, node: ts.Node) => {
+    if (!name || !(ts.isIdentifier(name) || ts.isStringLiteral(name))) return;
+    if (/^register\w*Tools$/.test(name.text)) return;
+    out.set(name.text, [...(out.get(name.text) ?? []), node]);
+  };
+  walk(parse(text), (n) => {
+    if (ts.isFunctionDeclaration(n) || ts.isMethodDeclaration(n)) add(n.name, n);
+    else if ((ts.isVariableDeclaration(n) || ts.isPropertyAssignment(n) || ts.isPropertyDeclaration(n)) && isFunctionValue(n.initializer)) add(n.name, n);
+  });
+  return out;
+}
+
+/** Each tool's registerTool(...) call in a file, by tool name. */
+function blocks(text: string): Map<string, ts.Node> {
+  const out = new Map<string, ts.Node>();
+  walk(parse(text), (n) => {
+    if (!ts.isCallExpression(n)) return;
+    const callee = n.expression;
+    const named = ts.isPropertyAccessExpression(callee) ? callee.name.text : ts.isIdentifier(callee) ? callee.text : "";
+    const first = n.arguments[0];
+    if (named === "registerTool" && first && ts.isStringLiteralLike(first)) out.set(first.text, n);
+  });
+  return out;
+}
+
+/** The node and every same-file function it names, transitively: their writes. */
+function reachableWrites(start: ts.Node, functions: Map<string, ts.Node[]>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const queue: Array<[string, ts.Node]> = [["(block)", start]];
+  while (queue.length > 0) {
+    const [label, node] = queue.shift() as [string, ts.Node];
+    for (const w of writesIn(node)) out.push(`${label}: ${w}`);
+    walk(node, (n) => {
+      if (ts.isIdentifier(n) && functions.has(n.text) && !seen.has(n.text)) {
+        seen.add(n.text);
+        for (const f of functions.get(n.text) ?? []) queue.push([n.text, f]);
+      }
+    });
   }
   return out;
 }
@@ -540,40 +557,61 @@ describe("read tools' blocks call no client write method or write helper (check 
 
   it.each(ALLOWED_GROUPS)("%s", (stem) => {
     const text = source(`tools/${stem}.ts`);
-    expect(aliases(text), `${stem}: metaApiClient used other than by member access, so the static check can't follow it`).toEqual([]);
+    expect(aliases(text), `${stem}: metaApiClient used other than by member access on its own name`).toEqual([]);
     const byName = blocks(text);
     const functions = fileFunctions(text);
     for (const name of readByGroup.get(stem) ?? []) {
       const block = byName.get(name);
-      expect(block, `${name}: no registration block found in tools/${stem}.ts`).toBeDefined();
+      expect(block, `${name}: no registerTool call found in tools/${stem}.ts`).toBeDefined();
       if (!block) continue;
-      expect(block, `${name}: client write call in a read block`).not.toMatch(WRITE_CALL);
-      for (const h of WRITE_HELPERS) expect(new RegExp(`\\b${h}\\b`).test(block), `${name} uses write helper ${h}`).toBe(false);
-      // Any function of this file the block names (called or passed by reference), one level deep.
-      for (const [f, body] of functions) {
-        if (!new RegExp(`\\b${f}\\b`).test(block)) continue;
-        expect(body, `${name} uses ${f}, which makes a client write call`).not.toMatch(WRITE_CALL);
-        for (const h of WRITE_HELPERS) expect(new RegExp(`\\b${h}\\b`).test(body), `${name} uses ${f}, which uses write helper ${h}`).toBe(false);
-      }
+      expect(reachableWrites(block, functions), `${name}: writes reachable from its registration`).toEqual([]);
     }
   });
 });
 
-describe("the static check's scanner", () => {
-  it("reads a helper to its closing brace, past nested functions and template literals", () => {
-    const text = "function h() {\n  const f = () => 1;\n  const t = `\n}\nconst x = ${'{'}`;\n  metaApiClient.postForm('/x', {});\n}\nfunction next() {}\n";
-    expect(fileFunctions(text).get("h")).toMatch(WRITE_CALL);
-    expect(fileFunctions(text).get("next")).not.toMatch(WRITE_CALL);
+describe("the static check's parser", () => {
+  const writes = (text: string, name = "t") => {
+    const block = blocks(text).get(name);
+    expect(block).toBeDefined();
+    return reachableWrites(block as ts.Node, fileFunctions(text));
+  };
+  const reg = (body: string) => `server.registerTool("t", { annotations: {} }, async (a: { id: string }) => { ${body} });\n`;
+  const W = "await metaApiClient.postForm('/x', {});";
+
+  it.each([
+    ["a typed object return", `async function h(): Promise<{ a: string }> { const f = () => 1; ${W} return { a: "" }; }\n${reg("await h();")}`],
+    ["an object-typed parameter", `function h(o: { a: string }) { ${W} }\n${reg("h({ a: '' });")}`],
+    ["a generic arrow", `const h = async <T,>(x: T): Promise<T> => { ${W} return x; };\n${reg("await h(1);")}`],
+    ["a multi-line expression body", `const h = (x: number) =>\n  x > 0 &&\n  metaApiClient.postForm('/x', {});\n${reg("h(1);")}`],
+    ["an arrow-valued property", `const helpers = { h: async () => { ${W} } };\n${reg("await helpers.h();")}`],
+    ["a method", `const helpers = { async h() { ${W} } };\n${reg("await helpers.h();")}`],
+    ["a helper passed by reference", `async function h() { ${W} }\n${reg("await Promise.resolve().then(h);")}`],
+    ["two helpers deep", `async function h2() { ${W} }\nasync function h() { await h2(); }\n${reg("await h();")}`],
+    ["after a template literal with column-0 lines", reg("const s = `\n}\nconst x = ${'{'}`;\n" + W)],
+    ["after a regex literal holding a quote", reg(`const m = /src="([^"]+)"/.exec(a.id);\n${W}`)],
+    ["through optional chaining", reg("await metaApiClient?.postForm('/x', {});")],
+  ])("finds a write in %s", (_label, text) => {
+    expect(writes(text)).not.toEqual([]);
   });
 
-  it("reads a registration to its closing parenthesis, past column-0 lines inside a template literal", () => {
-    const text = "server.registerTool(\n  \"t\",\n  { description: `a\nconst b\n}` },\n  async () => { await metaApiClient.postForm('/x', {}); },\n);\nconst after = 1;\n";
-    expect(blocks(text).get("t")).toMatch(WRITE_CALL);
+  it("reads a block to its end and no further, past regex and template literals", () => {
+    const text = `${reg("const m = /\"/.test(a.id); const s = `}`;")}server.registerTool("w", {}, async () => { ${W} });\n`;
+    expect(writes(text, "t")).toEqual([]);
+    expect(writes(text, "w")).not.toEqual([]);
   });
 
-  it("finds an alias however it is written", () => {
-    expect(aliases("const api = metaApiClient as typeof metaApiClient;")).not.toEqual([]);
-    expect(aliases("use(metaApiClient);")).not.toEqual([]);
-    expect(aliases("import { metaApiClient } from \"x\";\nmetaApiClient.get('/a');\nmetaApiClient?.get('/b');")).toEqual([]);
+  it.each([
+    ["a cast", "const api = metaApiClient as typeof metaApiClient;"],
+    ["an argument", "use(metaApiClient);"],
+    ["destructuring", "const { postForm } = metaApiClient;"],
+    ["element access", "metaApiClient['postForm']('/x', {});"],
+    ["a renamed import", "import { metaApiClient as api } from \"../meta/client.js\";"],
+    ["a namespace import", "import * as client from \"../meta/client.js\";"],
+  ])("refuses %s of the client", (_label, text) => {
+    expect(aliases(text)).not.toEqual([]);
+  });
+
+  it("allows member access on the imported name", () => {
+    expect(aliases("import { metaApiClient } from \"../meta/client.js\";\nmetaApiClient.get('/a');\nmetaApiClient?.get('/b');")).toEqual([]);
   });
 });
