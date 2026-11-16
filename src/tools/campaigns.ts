@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { metaApiClient } from "../meta/client.js";
 import { CAMPAIGN_AMOUNT_LABELS, statedAmounts } from "../meta/account-currency.js";
-import { MINOR_UNIT_NOTE } from "../meta/currency.js";
+import { amountLine, currencyOffset, MINOR_UNIT_NOTE } from "../meta/currency.js";
 import { normalizeAccountId, validateMetaId } from "../utils/format.js";
 import { buildFieldsParam } from "../utils/validation.js";
 import { CAMPAIGN_DEFAULT_FIELDS } from "../meta/types/campaign.js";
@@ -39,6 +39,63 @@ export const specialAdCategoryEnum = z.enum([
 
 const ADSET_BUDGET_SHARING_EXPLAINER =
   "Ad set budget sharing lets Meta move up to 20% of each ad set's daily budget to other ad sets in the same campaign when that is likely to perform better. It only works when the budget lives on the ad sets (Meta rejects it next to a campaign daily_budget or lifetime_budget, error 4834002), only with daily ad set budgets, and every ad set in the campaign must use the same bid strategy (Meta rejects enabling it without one, error 4834005). Meta recommends true.";
+
+/**
+ * Meta's documented value for a campaign spend_cap that removes the cap
+ * (minor units). It is sent only from ads_update_campaign's explicit
+ * remove_spend_cap flag, never computed from an amount.
+ */
+export const SPEND_CAP_REMOVAL_MINOR = "922337203685478";
+
+/**
+ * The digits of a spend cap given in the account currency's standard unit
+ * (1000 = USD 1,000.00). Refuses anything but a positive number written as
+ * plain digits with an optional fraction, so exponent forms (1e-7, 1e+21)
+ * never reach the conversion.
+ */
+export function spendCapDigits(amount: unknown): { int: string; frac: string } {
+  const match = typeof amount === "number" && amount > 0 ? /^(\d+)(?:\.(\d+))?$/.exec(String(amount)) : null;
+  if (!match) throw new Error("spend_cap must be a positive amount written as plain digits, in the account currency's standard unit (1000 = USD 1,000.00).");
+  return { int: match[1], frac: match[2] ?? "" };
+}
+
+/**
+ * A spend cap in the account currency's standard unit as Meta's minor unit,
+ * as a decimal string: (1000, "USD") is "100000", (500000, "COP") is
+ * "500000". The conversion works on the digits, never on amount * offset,
+ * so 0.29 is 29 and not 28. Throws when the amount has more decimal places
+ * than the currency's unit allows, when the currency is not in Meta's
+ * table, or when the result would be the removal value or above.
+ */
+export function campaignSpendCapMinor(amount: unknown, currency: string): string {
+  const { int, frac } = spendCapDigits(amount);
+  const offset = currencyOffset(currency);
+  if (offset === undefined) throw new Error(`The account currency ${currency} is not in Meta's currency table, so the spend cap cannot be converted.`);
+  const places = String(offset).length - 1;
+  if (frac.length > places) {
+    throw new Error(`spend_cap ${String(amount)} has more decimal places than ${currency} allows (${places}).`);
+  }
+  const minor = BigInt(int) * BigInt(offset) + BigInt(frac.padEnd(places, "0") || "0");
+  if (minor >= BigInt(SPEND_CAP_REMOVAL_MINOR)) {
+    throw new Error(`spend_cap ${String(amount)} ${currency} is at or above Meta's value for "no cap"; use remove_spend_cap to remove a cap.`);
+  }
+  return minor.toString();
+}
+
+/** The account currency of a campaign, read from Meta; throws rather than guess. */
+async function campaignCurrency(campaignId: string): Promise<string> {
+  const campaign = await metaApiClient.get<{ account_id?: unknown }>(`/${campaignId}`, { fields: "account_id" });
+  const accountId = campaign?.account_id;
+  if (typeof accountId !== "string" || !/^\d{1,30}$/.test(accountId)) {
+    throw new Error(`Meta did not report campaign ${campaignId}'s ad account, so its spend cap was not changed.`);
+  }
+  const account = await metaApiClient.get<{ currency?: unknown }>(`/act_${accountId}`, { fields: "currency" });
+  const currency = account?.currency;
+  if (typeof currency !== "string" || !/^[A-Za-z]{3}$/.test(currency) || currencyOffset(currency) === undefined) {
+    throw new Error(`Meta did not report a known currency for ad account act_${accountId}, so the spend cap was not changed.`);
+  }
+  return currency.toUpperCase();
+}
 
 export function registerCampaignTools(server: McpServer): void {
   // ─── Get Campaigns ───────────────────────────────────────────
@@ -165,6 +222,7 @@ export function registerCampaignTools(server: McpServer): void {
           .number()
           .int()
           .positive()
+          .max(Number(SPEND_CAP_REMOVAL_MINOR) - 1)
           .optional()
           .describe("Most the campaign may spend over its lifetime, in the same unit as daily_budget (USD 10000 = USD 100.00, COP 500000 = 500,000 pesos). This is NOT the standard unit of the account spend cap (ads_update_spend_cap). Meta's minimum is about USD 100 in the account currency."),
         special_ad_category_country: z.array(z.string().regex(/^[A-Z]{2}$/)).min(1).optional().describe("Countries (ISO codes) where the special ad categories apply, e.g. [\"CO\"]"),
@@ -206,7 +264,13 @@ export function registerCampaignTools(server: McpServer): void {
         body.is_adset_budget_sharing_enabled = false;
       }
       if (bid_strategy) body.bid_strategy = bid_strategy;
-      if (spend_cap !== undefined) body.spend_cap = String(spend_cap);
+      if (spend_cap !== undefined) {
+        // Meta reads its removal value as "no cap": it is never an amount.
+        if (spend_cap >= Number(SPEND_CAP_REMOVAL_MINOR)) {
+          throw new Error(`spend_cap ${spend_cap} is at or above Meta's value for "no cap"; create the campaign with a cap below it, or with none (remove_spend_cap on ads_update_campaign removes a cap).`);
+        }
+        body.spend_cap = String(spend_cap);
+      }
       if (special_ad_category_country) body.special_ad_category_country = JSON.stringify(special_ad_category_country);
 
       const result = await metaApiClient.postForm<{ id: string }>(
@@ -234,7 +298,7 @@ export function registerCampaignTools(server: McpServer): void {
   server.registerTool(
     "ads_update_campaign",
     {
-      description: `${WRITE_WARNING}Update an existing campaign's name, status, budget, bid strategy, or ad set budget sharing.`,
+      description: `${WRITE_WARNING}Update an existing campaign's name, status, budget, bid strategy, ad set budget sharing, or lifetime spend cap.`,
       inputSchema: {
         campaign_id: z.string().describe("Campaign ID to update"),
         name: z.string().optional(),
@@ -246,11 +310,30 @@ export function registerCampaignTools(server: McpServer): void {
           .optional()
           .describe(`${ADSET_BUDGET_SHARING_EXPLAINER} On an existing campaign Meta only supports turning it off; turning it on for a running campaign is rejected (error 3858418). Omit to keep the current setting.`),
         bid_strategy: bidStrategyEnum.optional(),
+        spend_cap: z
+          .number()
+          .positive()
+          .optional()
+          .describe("Most the campaign may spend over its lifetime, in the account currency's STANDARD unit: 1000 = USD 1,000.00, 500000 = COP 500,000. This is NOT the minor unit of daily_budget, lifetime_budget or ads_create_campaign's spend_cap; the tool reads the account currency and converts. Meta's minimum is about USD 100. The spend guard refuses a cap change sent together with other fields, so send it alone."),
+        remove_spend_cap: z
+          .boolean()
+          .optional()
+          .describe("true removes the campaign's spend cap (sends Meta's removal value). Not with spend_cap."),
       },
       annotations: { ...UPDATE },
     },
-    async ({ campaign_id, name, status, daily_budget, lifetime_budget, is_adset_budget_sharing_enabled, bid_strategy }) => {
+    async ({ campaign_id, name, status, daily_budget, lifetime_budget, is_adset_budget_sharing_enabled, bid_strategy, spend_cap, remove_spend_cap }) => {
       const id = validateMetaId(campaign_id, "campaign");
+      const removeCap = remove_spend_cap === true;
+      const setCap = spend_cap !== undefined;
+      if (setCap && removeCap) throw new Error("Pass spend_cap or remove_spend_cap, not both.");
+      // A cap on act_<n> would be the account's limit, in another unit; a
+      // campaign ID is all digits.
+      if ((setCap || removeCap) && !/^\d+$/.test(id)) {
+        throw new Error(`${id} is not a campaign ID (campaign IDs are numeric), so no spend cap was sent.`);
+      }
+      if (setCap) spendCapDigits(spend_cap);
+
       const body: Record<string, string | number | boolean> = {};
       if (name !== undefined) body.name = name;
       if (status !== undefined) body.status = status;
@@ -260,12 +343,22 @@ export function registerCampaignTools(server: McpServer): void {
         body.is_adset_budget_sharing_enabled = is_adset_budget_sharing_enabled;
       }
       if (bid_strategy !== undefined) body.bid_strategy = bid_strategy;
+      let capLine = "";
+      if (removeCap) {
+        body.spend_cap = SPEND_CAP_REMOVAL_MINOR;
+        capLine = "\nSpend cap: removed";
+      } else if (setCap) {
+        const currency = await campaignCurrency(id);
+        const minor = campaignSpendCapMinor(spend_cap, currency);
+        body.spend_cap = minor;
+        capLine = `\n${amountLine("Spend cap", Number(minor), currency)} (spend_cap=${minor})`;
+      }
 
       await metaApiClient.postForm<{ success: boolean }>(
         `/${id}`,
         body,
       );
-      const amountLines = await statedAmounts(body, { entityId: id });
+      const amountLines = (await statedAmounts(body, { entityId: id })) + capLine;
 
       return {
         content: [
