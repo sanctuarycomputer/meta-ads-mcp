@@ -1,12 +1,10 @@
 import pino from "pino";
-import { isStdioTransport } from "./transport-mode.js";
-
-const isStdio = isStdioTransport(process.argv);
+import { isCredentialName, scrubCredentials, scrubCredentialsDeep } from "./scrub-credentials.js";
 
 /**
- * Defense in depth only. Secret hygiene is enforced at the call sites (log
- * hashToken()/maskToken() output, never the raw value); this catches a future
- * `logger.info({ apify_token })` slipping through code review.
+ * Field-name redaction, before serialization. The line-level scrub in
+ * scrubLogLine is what keeps a secret out of the output wherever it sits; these
+ * paths also catch a short credential that is not the process's own secret.
  */
 const redact = {
   paths: [
@@ -30,20 +28,53 @@ const redact = {
     "authorization",
     "*.authorization",
     "headers.Authorization",
+    "appsecret_proof",
+    "*.appsecret_proof",
+    "app_secret",
+    "*.app_secret",
+    "client_secret",
+    "*.client_secret",
   ],
   censor: "[REDACTED]",
 };
 
-export const logger = isStdio
-  ? pino(
-      { level: process.env.LOG_LEVEL ?? "info", redact },
-      pino.destination({ fd: 2, sync: false }),
-    )
-  : pino({
-      level: process.env.LOG_LEVEL ?? "info",
+/**
+ * A name=value pair right after a double quote, which the scrub's own pair
+ * pattern does not treat as a separator: `"access_token=…` in raw text.
+ */
+const QUOTED_PAIR = /"([A-Za-z0-9_%.-]{1,64})=([^&#;,\s"'<>]*)/g;
+
+/**
+ * Cleans one serialized log line before it is written: every string at any
+ * depth loses META_ACCESS_TOKEN, META_APP_SECRET and credential-named values.
+ * A line that is not JSON is scrubbed as text.
+ */
+export function scrubLogLine(line: string): string {
+  try {
+    return `${JSON.stringify(scrubCredentialsDeep(JSON.parse(line) as unknown))}\n`;
+  } catch {
+    return scrubCredentials(line).replace(QUOTED_PAIR, (match, name: string, value: string) =>
+      value.length > 0 && isCredentialName(name) ? `"${name}=[REDACTED]` : match,
+    );
+  }
+}
+
+/**
+ * The server's logger. Always JSON on stderr (fd 2): stdout carries the MCP
+ * stdio protocol, and this fork runs only over stdio. Level is fixed at info.
+ */
+export function createLogger(
+  destination: pino.DestinationStream = pino.destination({ fd: 2, sync: false }),
+): pino.Logger {
+  return pino(
+    {
+      level: "info",
+      serializers: { err: pino.stdSerializers.err, error: pino.stdSerializers.err },
       redact,
-      transport:
-        process.env.NODE_ENV !== "production"
-          ? { target: "pino-pretty", options: { colorize: true } }
-          : undefined,
-    });
+      hooks: { streamWrite: scrubLogLine },
+    },
+    destination,
+  );
+}
+
+export const logger = createLogger();
