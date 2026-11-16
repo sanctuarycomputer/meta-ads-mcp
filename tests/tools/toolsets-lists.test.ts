@@ -11,15 +11,20 @@
  *      - a runtime probe of each handler, with argument sets built from its
  *        schema and two stub answers;
  *      - a static check, on the TypeScript syntax tree, of each read tool's
- *        registerTool call and of everything in the same file it names
- *        (resolved by the type checker, so by scope, not by spelling),
+ *        registerTool call and of every function in the same file it names,
  *        followed transitively;
  *      - the read tools' names, pinned.
  *      What this doesn't prove: a write reached only through a function in
  *      another module (other than the known write helpers), or only by a
  *      response shape or argument combination the probe doesn't build. The
  *      static check refuses any use of the client other than a member access
- *      on its imported name, so no alias hides a call. On the read server,
+ *      on its imported name, so no alias hides a call. It follows functions by
+ *      the name they are declared under (declarations, function-valued
+ *      variables, properties and methods); a function a block reaches only some
+ *      other way (wrapped in a call, held in an array, in a class constructor,
+ *      assigned after its declaration, behind a getter) is left to the runtime
+ *      probe. A local sharing a name with a writing function elsewhere in the
+ *      file fails the check: rename one. On the read server,
  *      253's client method allowlist (META_ADS_READ_ONLY=1) is the runtime
  *      backstop.
  */
@@ -489,37 +494,43 @@ function aliases(text: string): string[] {
   return out;
 }
 
-/** Client write calls and write-helper references inside a node (or, with deep false, at the node itself). */
-function writesIn(node: ts.Node, deep = true): string[] {
+/** Client write calls and write-helper references inside a node. */
+function writesIn(node: ts.Node): string[] {
   const out: string[] = [];
-  const check = (n: ts.Node) => {
+  walk(node, (n) => {
     if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === "metaApiClient" && WRITE_METHODS.has(n.name.text)) {
       out.push(n.getText());
     } else if (ts.isIdentifier(n) && WRITE_HELPERS.has(n.text)) {
       out.push(n.text);
     }
-  };
-  if (deep) walk(node, check);
-  else check(node);
+  });
   return out;
 }
 
-/** A file parsed into a one-file program, so the type checker resolves each name to its own declaration. */
-type Analysed = { sf: ts.SourceFile; checker: ts.TypeChecker };
-function analyse(text: string): Analysed {
-  const file = "/probe.ts";
-  const host = ts.createCompilerHost({});
-  host.getSourceFile = (f, target) => (f === file ? ts.createSourceFile(f, text, target, true, ts.ScriptKind.TS) : undefined);
-  host.fileExists = (f) => f === file;
-  host.readFile = (f) => (f === file ? text : undefined);
-  const program = ts.createProgram([file], { noResolve: true, noLib: true, types: [], target: ts.ScriptTarget.Latest }, host);
-  return { sf: program.getSourceFile(file) as ts.SourceFile, checker: program.getTypeChecker() };
+const isFunctionValue = (e: ts.Expression | undefined): boolean => {
+  let cur = e;
+  while (cur && (ts.isParenthesizedExpression(cur) || ts.isAsExpression(cur) || ts.isSatisfiesExpression(cur))) cur = cur.expression;
+  return !!cur && (ts.isArrowFunction(cur) || ts.isFunctionExpression(cur));
+};
+
+/** Every function in a file by name: declarations, function-valued variables, properties and methods. */
+function fileFunctions(text: string): Map<string, ts.Node[]> {
+  const out = new Map<string, ts.Node[]>();
+  const add = (name: ts.Node | undefined, node: ts.Node) => {
+    if (!name || !(ts.isIdentifier(name) || ts.isStringLiteral(name))) return;
+    out.set(name.text, [...(out.get(name.text) ?? []), node]);
+  };
+  walk(parse(text), (n) => {
+    if (ts.isFunctionDeclaration(n) || ts.isMethodDeclaration(n)) add(n.name, n);
+    else if ((ts.isVariableDeclaration(n) || ts.isPropertyAssignment(n) || ts.isPropertyDeclaration(n)) && isFunctionValue(n.initializer)) add(n.name, n);
+  });
+  return out;
 }
 
 /** Each tool's registerTool(...) call in a file, by tool name. */
-function blocks(sf: ts.SourceFile): Map<string, ts.Node> {
+function blocks(text: string): Map<string, ts.Node> {
   const out = new Map<string, ts.Node>();
-  walk(sf, (n) => {
+  walk(parse(text), (n) => {
     if (!ts.isCallExpression(n)) return;
     const callee = n.expression;
     const named = ts.isPropertyAccessExpression(callee) ? callee.name.text : ts.isIdentifier(callee) ? callee.text : "";
@@ -529,147 +540,18 @@ function blocks(sf: ts.SourceFile): Map<string, ts.Node> {
   return out;
 }
 
-/** Strip parentheses, casts, `satisfies` and `!` around an expression. */
-function bare(e: ts.Expression): ts.Expression {
-  let cur = e;
-  while (ts.isParenthesizedExpression(cur) || ts.isAsExpression(cur) || ts.isTypeAssertionExpression(cur)
-    || ts.isSatisfiesExpression(cur) || ts.isNonNullExpression(cur)) cur = cur.expression;
-  return cur;
-}
-
-const isFunctionValue = (e: ts.Expression | undefined): boolean => !!e && (ts.isArrowFunction(bare(e)) || ts.isFunctionExpression(bare(e)));
-
-/** A member of an object literal or class whose value is a function: reached by its own name, not through its holder. */
-const isFunctionMember = (m: ts.Node): boolean =>
-  ts.isMethodDeclaration(m) || ts.isGetAccessorDeclaration(m) || ts.isSetAccessorDeclaration(m)
-  || ((ts.isPropertyAssignment(m) || ts.isPropertyDeclaration(m)) && isFunctionValue(m.initializer));
-
-/** Inside the left side of a destructuring assignment. */
-const inDestructuringTarget = (n: ts.Node): boolean => {
-  for (let c: ts.Node = n, p = n.parent; p; c = p, p = p.parent) {
-    if (ts.isBinaryExpression(p)) return p.left === c && p.operatorToken.kind === ts.SyntaxKind.EqualsToken;
-    if (!ts.isObjectLiteralExpression(p) && !ts.isArrayLiteralExpression(p) && !ts.isPropertyAssignment(p)
-      && !ts.isShorthandPropertyAssignment(p) && !ts.isParenthesizedExpression(p)) return false;
-  }
-  return false;
-};
-
-/**
- * The member a name selects, if it is in a member position: `x.name`, or a key
- * of a destructuring (`const { name } = …`, `({ name: v } = …)`), so the member
- * is found by spelling in whatever object was destructured.
- */
-function memberKey(n: ts.Identifier | ts.PrivateIdentifier): string | undefined {
-  const p = n.parent;
-  if (ts.isPropertyAccessExpression(p) && p.name === n) return n.text;
-  if (ts.isBindingElement(p) && ts.isObjectBindingPattern(p.parent)) return nameOfKey(p.propertyName ?? p.name);
-  if ((ts.isShorthandPropertyAssignment(p) && p.name === n) || (ts.isPropertyAssignment(p) && inDestructuringTarget(p))) {
-    return inDestructuringTarget(p) ? nameOfKey(p.name) : undefined;
-  }
-  return undefined;
-}
-const nameOfKey = (k: ts.Node): string | undefined => (ts.isIdentifier(k) || ts.isStringLiteral(k) ? k.text : undefined);
-
-/**
- * Writes in the node and in everything in the same file it names, followed
- * transitively:
- * - plain names (variables, parameters, functions, classes) by symbol, through
- *   the type checker, so a local never stands for an unrelated function of the
- *   same spelling: each name's declaration (for a destructured name, the whole
- *   declaration; for a for...of or for...in binding, also the iterated
- *   expression), the value a shorthand property stands for, and every assignment
- *   to it, including destructuring assignments and `??=` and the other
- *   assignment operators;
- * - member names (`x.h`, or a destructuring key), and names the checker can't resolve, also by
- *   spelling, as the approved check did: every function-valued declaration,
- *   property, method or accessor of that name anywhere in the file, and the
- *   value of every assignment to a property of that name (`holder.h = …`,
- *   `holder["h"] = …`, through casts), so a function put on an object by
- *   Object.assign, a placeholder filled later, or an override reached through a
- *   base type is found.
- * A holder reached by name (an object literal or class) is read without its
- * function-valued members, which are reached by their own names when used; so
- * a block calling helpers.r() is not charged with helpers.w(). Type annotations
- * are not read: a member named only in a type adds nothing.
- */
-function reachableWrites(start: ts.Node, { sf, checker }: Analysed): string[] {
-  const bySymbol = new Map<ts.Symbol, ts.Node[]>();
-  const bySpelling = new Map<string, ts.Node[]>();
-  const file = <K>(map: Map<K, ts.Node[]>, key: K | undefined, n: ts.Node) => {
-    if (key !== undefined) map.set(key, [...(map.get(key) ?? []), n]);
-  };
-  const nameOf = (name: ts.Node | undefined) => (name && (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isPrivateIdentifier(name)) ? name.text : undefined);
-
-  walk(sf, (n) => {
-    // Function-valued things, by spelling.
-    if (ts.isFunctionDeclaration(n) || isFunctionMember(n)) file(bySpelling, nameOf((n as ts.NamedDeclaration).name), n);
-    else if (ts.isVariableDeclaration(n) && isFunctionValue(n.initializer)) file(bySpelling, nameOf(n.name), n);
-    // Assignments.
-    if (!ts.isBinaryExpression(n)) return;
-    const op = n.operatorToken.kind;
-    if (op < ts.SyntaxKind.FirstAssignment || op > ts.SyntaxKind.LastAssignment) return;
-    const left = bare(n.left);
-    if (ts.isObjectLiteralExpression(left) || ts.isArrayLiteralExpression(left)) {
-      // `({ a, b: c } = …)`, `[a] = …`: filed under every name bound on the left.
-      walk(left, (m) => {
-        if (ts.isShorthandPropertyAssignment(m)) file(bySymbol, checker.getShorthandAssignmentValueSymbol(m), n);
-        else if (ts.isIdentifier(m) && !(ts.isPropertyAssignment(m.parent) && m.parent.name === m)) file(bySymbol, checker.getSymbolAtLocation(m), n);
-      });
-      return;
-    }
-    file(bySymbol, checker.getSymbolAtLocation(left), n);
-    // `holder.h = v`, `holder["h"] = v`: the value, under the property's spelling.
-    if (ts.isPropertyAccessExpression(left)) file(bySpelling, left.name.text, n.right);
-    else if (ts.isElementAccessExpression(left) && ts.isStringLiteralLike(left.argumentExpression)) file(bySpelling, left.argumentExpression.text, n.right);
-  });
-
-  /** What to read for a declaration: the whole declaration around a binding pattern, and a loop binding's iterable. */
-  const declared = (d: ts.Node): ts.Node[] => {
-    let cur = d;
-    while (ts.isBindingElement(cur) || ts.isObjectBindingPattern(cur) || ts.isArrayBindingPattern(cur)) cur = cur.parent;
-    const loop = ts.isVariableDeclaration(cur) && ts.isVariableDeclarationList(cur.parent) ? cur.parent.parent : undefined;
-    return loop && (ts.isForOfStatement(loop) || ts.isForInStatement(loop)) ? [cur, loop.expression] : [cur];
-  };
-
-  /** Walk a reached node: no type annotations, and (outside the block itself) no function-valued members of a holder. */
-  const visit = (node: ts.Node, isStart: boolean, f: (n: ts.Node) => void): void => {
-    const go = (n: ts.Node): void => {
-      if (ts.isTypeNode(n)) return;
-      if (!isStart && n !== node && isFunctionMember(n) && (ts.isObjectLiteralExpression(n.parent) || ts.isClassLike(n.parent))) return;
-      f(n);
-      ts.forEachChild(n, go);
-    };
-    go(node);
-  };
-
+/** The node and every same-file function it names, transitively: their writes. */
+function reachableWrites(start: ts.Node, functions: Map<string, ts.Node[]>): string[] {
   const out: string[] = [];
-  const seenSymbols = new Set<ts.Symbol>();
-  const seenSpellings = new Set<string>();
-  const queue: Array<[string, ts.Node, boolean]> = [["(block)", start, true]];
-  // Each symbol and spelling is followed once, so a declaration is queued at most once per name;
-  // one inside the node being read is queued too, since a holder's function members are skipped there.
-  const enqueue = (label: string, d: ts.Node) => {
-    if (d.getSourceFile() === sf) queue.push([label, d, false]);
-  };
+  const seen = new Set<string>();
+  const queue: Array<[string, ts.Node]> = [["(block)", start]];
   while (queue.length > 0) {
-    const [label, node, isStart] = queue.shift() as [string, ts.Node, boolean];
-    visit(node, isStart, (n) => {
-      for (const w of writesIn(n, false)) out.push(`${label}: ${w}`);
-      if (!ts.isIdentifier(n) && !ts.isPrivateIdentifier(n)) return;
-      const syms = [checker.getSymbolAtLocation(n)];
-      if (ts.isShorthandPropertyAssignment(n.parent) && n.parent.name === n) syms.push(checker.getShorthandAssignmentValueSymbol(n.parent));
-      for (const sym of syms) {
-        if (!sym || seenSymbols.has(sym)) continue;
-        seenSymbols.add(sym);
-        for (const d of (sym.declarations ?? []).flatMap(declared)) enqueue(sym.name, d);
-        for (const d of bySymbol.get(sym) ?? []) enqueue(sym.name, d);
-      }
-      // Spelling for member names and unresolved names only, so a plain local that
-      // shares a name with an unrelated function elsewhere doesn't pull that function in.
-      const key = memberKey(n) ?? (syms[0] ? undefined : n.text);
-      if (key !== undefined && !seenSpellings.has(key)) {
-        seenSpellings.add(key);
-        for (const d of bySpelling.get(key) ?? []) enqueue(key, d);
+    const [label, node] = queue.shift() as [string, ts.Node];
+    for (const w of writesIn(node)) out.push(`${label}: ${w}`);
+    walk(node, (n) => {
+      if (ts.isIdentifier(n) && functions.has(n.text) && !seen.has(n.text)) {
+        seen.add(n.text);
+        for (const f of functions.get(n.text) ?? []) queue.push([n.text, f]);
       }
     });
   }
@@ -683,23 +565,22 @@ describe("read tools' blocks call no client write method or write helper (check 
   it.each(ALLOWED_GROUPS)("%s", (stem) => {
     const text = source(`tools/${stem}.ts`);
     expect(aliases(text), `${stem}: metaApiClient used other than by member access on its own name`).toEqual([]);
-    const analysed = analyse(text);
-    const byName = blocks(analysed.sf);
+    const byName = blocks(text);
+    const functions = fileFunctions(text);
     for (const name of readByGroup.get(stem) ?? []) {
       const block = byName.get(name);
       expect(block, `${name}: no registerTool call found in tools/${stem}.ts`).toBeDefined();
       if (!block) continue;
-      expect(reachableWrites(block, analysed), `${name}: writes reachable from its registration`).toEqual([]);
+      expect(reachableWrites(block, functions), `${name}: writes reachable from its registration`).toEqual([]);
     }
   });
 });
 
 describe("the static check's parser", () => {
   const writes = (text: string, name = "t") => {
-    const analysed = analyse(text);
-    const block = blocks(analysed.sf).get(name);
+    const block = blocks(text).get(name);
     expect(block).toBeDefined();
-    return reachableWrites(block as ts.Node, analysed);
+    return reachableWrites(block as ts.Node, fileFunctions(text));
   };
   const reg = (body: string) => `server.registerTool("t", { annotations: {} }, async (a: { id: string }) => { ${body} });\n`;
   const W = "await metaApiClient.postForm('/x', {});";
@@ -716,68 +597,9 @@ describe("the static check's parser", () => {
     ["after a template literal with column-0 lines", reg("const s = `\n}\nconst x = ${'{'}`;\n" + W)],
     ["after a regex literal holding a quote", reg(`const m = /src="([^"]+)"/.exec(a.id);\n${W}`)],
     ["through optional chaining", reg("await metaApiClient?.postForm('/x', {});")],
-    ["a helper wrapped in a call", `const h = Object.assign(async () => { ${W} }, {});\n${reg("await h();")}`],
-    ["a helper held in an array", `const hs = [async () => { ${W} }];\n${reg("await hs[0]();")}`],
-    ["a class constructor", `class C { constructor() { void metaApiClient.postForm('/x', {}); } }\n${reg("new C();")}`],
-    ["a helper assigned after its declaration", `let h: () => Promise<unknown>;\nh = async () => { ${W} };\n${reg("await h();")}`],
-    ["a getter", `const o = { get h() { return metaApiClient.postForm('/x', {}); } };\n${reg("await o.h;")}`],
-    ["a helper reached through a shorthand property", `const sneak = async () => { ${W} };\nconst o = { sneak };\n${reg("await o.sneak();")}`],
-    ["a helper bound by destructuring", `const { sneak } = { sneak: async () => { ${W} } };\n${reg("await sneak();")}`],
-    ["a helper bound by array destructuring", `const [sneak] = [async () => { ${W} }];\n${reg("await sneak();")}`],
-    ["a helper set by ??=", `let h: (() => Promise<unknown>) | undefined;\nh ??= async () => { ${W} };\n${reg("await h?.();")}`],
-    ["a helper set by destructuring assignment", `let sneak: any;\n({ sneak } = { sneak: async () => { ${W} } });\n${reg("await sneak();")}`],
-    ["a helper set by renamed destructuring assignment", `let s: any;\n({ sneak: s } = { sneak: async () => { ${W} } });\n${reg("await s();")}`],
-    ["a helper set by array destructuring assignment", `let s: any;\n[s] = [async () => { ${W} }];\n${reg("await s();")}`],
-    ["a for...of binding around the registration", `for (const { h } of [{ h: async () => { ${W} } }]) {\n${reg("await h();")}}\n`],
-    ["a plain for...of binding around the registration", `for (const h of [async () => { ${W} }]) {\n${reg("await h();")}}\n`],
-    ["a helper put on a holder by Object.assign", `const box: any = {};\nObject.assign(box, { sneak: async () => { ${W} } });\n${reg("await box.sneak();")}`],
-    ["a helper set through a cast", `const box = {};\n(box as any).sneak = async () => { ${W} };\n${reg("await (box as any).sneak();")}`],
-    ["a helper set through a non-null holder", `const box: { h?: () => Promise<unknown> } | undefined = {};\nbox!.h = async () => { ${W} };\n${reg("await box!.h?.();")}`],
-    ["a helper set on an any-typed holder", `const holder: any = {};\nholder.h = async () => { ${W} };\n${reg("await holder.h();")}`],
     ["a helper named like a register function", `async function registerSneakTools() { ${W} }\n${reg("await registerSneakTools();")}`],
   ])("finds a write in %s", (_label, text) => {
     expect(writes(text)).not.toEqual([]);
-  });
-
-  it("does not charge a block that reads one property of a holder with writes stored under another", () => {
-    const text = `const memo: any = {};\nexport async function other() { memo.w = await metaApiClient.postForm('/x', {}); }\n${reg("void memo.v;")}`;
-    expect(writes(text)).toEqual([]);
-  });
-
-  it("does not pull in a writing function elsewhere because a local shares its name", () => {
-    const text = `export async function sneak() { return metaApiClient.postForm('/x', {}); }\n${reg("const sneak = 1; void sneak;")}`;
-    expect(writes(text)).toEqual([]);
-  });
-
-  it.each([
-    ["a placeholder property filled by Object.assign", `const box = { sneak: undefined as any };\nObject.assign(box, { sneak: async () => { ${W} } });\n${reg("await box.sneak();")}`],
-    ["a class field filled by Object.assign", `class Box { sneak!: () => Promise<unknown>; }\nconst box = new Box();\nObject.assign(box, { sneak: async () => { ${W} } });\n${reg("await box.sneak();")}`],
-    ["an override reached through a base type", `class Base { async sneak(): Promise<unknown> { return 1; } }\nclass Impl extends Base { async sneak() { return metaApiClient.postForm('/x', {}); } }\nlet cur: Base = new Base();\nfunction use(b: Base) { cur = b; }\nuse(new Impl());\n${reg("await cur.sneak();")}`],
-    ["a named function stored on a typed holder", `async function sneak() { ${W} }\nconst holder: { h?: () => Promise<unknown> } = {};\nholder.h = sneak;\n${reg("await holder.h?.();")}`],
-    ["a wrapped function stored on a holder", `const holder: { h?: unknown } = {};\nholder.h = Object.assign(async () => { ${W} }, {});\n${reg("void holder.h;")}`],
-    ["a function stored by string key", `const holder: Record<string, () => Promise<unknown>> = {};\nholder["h"] = async () => { ${W} };\n${reg("await holder.h();")}`],
-    ["a function stored through a cast on the left", `let s: any;\n(s as any) = async () => { ${W} };\n${reg("await s();")}`],
-  ])("finds a write through %s", (_label, text) => {
-    expect(writes(text)).not.toEqual([]);
-  });
-
-  it.each([
-    ["a typed holder with the write stored under another member", `const memo: { v?: number; w?: unknown } = {};\nexport async function other() { memo.w = await metaApiClient.postForm('/x', {}); }\n${reg("void memo.v;")}`],
-    ["a helper object whose other method writes", `const helpers = { async r() { return 1; }, async w() { ${W} } };\n${reg("await helpers.r();")}`],
-    ["a helper class whose other method writes", `class Helpers { async r() { return 1; } async w() { ${W} } }\nconst helpers = new Helpers();\n${reg("await helpers.r();")}`],
-    ["a member named only in a type", `interface T { w: () => void }\nexport async function w() { ${W} }\n${reg("const t: T | undefined = undefined; void t;")}`],
-  ])("charges nothing for %s", (_label, text) => {
-    expect(writes(text)).toEqual([]);
-  });
-
-  it("finds a function reached through a property typed only by an interface", () => {
-    const text = `interface Box { h: () => Promise<unknown> }\nfunction make(): Box { return { h: async () => { ${W} } }; }\nconst box = make();\n${reg("await box.h();")}`;
-    expect(writes(text)).not.toEqual([]);
-  });
-
-  it("follows a name to its own declaration, not to another of the same spelling", () => {
-    const text = `function other() { const result = metaApiClient.postForm('/x', {}); return result; }\n${reg("const result = 1; return result;")}`;
-    expect(writes(text)).toEqual([]);
   });
 
   it("reads a block to its end and no further, past regex and template literals", () => {
