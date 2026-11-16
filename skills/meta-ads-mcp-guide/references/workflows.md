@@ -69,7 +69,7 @@ Advantage+ AI features that rewrite copy or edit media stay off unless you list 
 
 "Never spend more than 2 million pesos on this campaign." "Show it at most twice a week." "Count 7-day clicks and 1-day views."
 
-- **Campaign spend cap.** `ads_create_campaign` with `spend_cap`, in the same unit as `daily_budget`: USD 10000 is USD 100.00, COP 2000000 is 2,000,000 pesos. Meta refuses a cap under about USD 100. It is not the account cap of `ads_update_spend_cap`, which takes whole currency.
+- **Campaign spend cap.** `ads_create_campaign` with `spend_cap`, in the same unit as `daily_budget`: USD 10000 is USD 100.00, COP 2000000 is 2,000,000 pesos. Meta refuses a cap under about USD 100. To set or change the cap later, `ads_update_campaign` with `spend_cap` in whole currency (USD 1000 is USD 1,000.00), which the tool converts from the account currency; `remove_spend_cap: true` removes it. Neither is the account cap of `ads_update_spend_cap`, which takes whole currency.
 - **Frequency cap.** `ads_create_ad_set` with `frequency_control_specs: [{ event: "IMPRESSIONS", interval_days: 7, max_frequency: 2 }]`, on a reach ad set.
 - **Attribution.** `ads_create_ad_set` with `attribution_spec`, e.g. `[{ event_type: "CLICK_THROUGH", window_days: 7 }, { event_type: "VIEW_THROUGH", window_days: 1 }]`.
 - **Ads seen in the EU.** `dsa_beneficiary` and `dsa_payor` name who benefits and who pays; without them Meta uses the account's defaults.

@@ -302,7 +302,17 @@ describe("money amounts in what a model reads on tools/list", () => {
 
     it("is the only tool that takes a spend_cap besides a campaign's own, which is in the minor unit", () => {
       const taking = published().filter((tool) => tool.parameters.has("spend_cap")).map((tool) => tool.name);
-      expect(taking.sort()).toEqual(["ads_create_campaign", "ads_update_spend_cap"]);
+      expect(taking.sort()).toEqual(["ads_create_campaign", "ads_update_campaign", "ads_update_spend_cap"]);
+    });
+
+    // 266: changing a campaign's cap takes whole currency, which the tool
+    // converts from the account currency; creating one keeps the minor unit.
+    it("a campaign update's spend_cap says it is in the STANDARD unit, not the budgets'", () => {
+      const update = published().find((tool) => tool.name === "ads_update_campaign")!;
+      const text = update.descriptions.find((description) => /spend over its lifetime/.test(description)) ?? "";
+      expect(text).toMatch(/STANDARD unit/);
+      expect(text).toMatch(/1000 = USD 1,000\.00/);
+      expect(text).toMatch(/NOT the minor unit of daily_budget/);
     });
 
     // Measured on a USD account: 5000 is refused under the $100 minimum and

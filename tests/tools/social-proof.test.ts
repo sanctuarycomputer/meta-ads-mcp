@@ -348,13 +348,13 @@ describe("ads_duplicate_ad", () => {
     expect(result.content[0].text).toContain("same Facebook post and Instagram media");
   });
 
-  it("names the copies as asked and creates them active only when asked", async () => {
+  it("names the copies as asked and creates them paused even when asked for ACTIVE", async () => {
     stubMeta({ ...SOURCE, "POST /act_123/ads": createdAds() });
 
     await duplicateTool().handler({ ad_id: "3001", ad_set_ids: ["7001"], name: "Copy B", status: "ACTIVE", idempotency_key: "k1" });
 
     expect(posts()[0].get("name")).toBe("Copy B");
-    expect(posts()[0].get("status")).toBe("ACTIVE");
+    expect(posts()[0].get("status")).toBe("PAUSED");
   });
 
   it("says every text option comes along when the source has several", async () => {

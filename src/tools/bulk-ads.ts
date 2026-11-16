@@ -106,7 +106,7 @@ export function registerBulkAdTools(server: McpServer): void {
   server.registerTool(
     "ads_bulk_create_video_ads",
     {
-      description: `${WRITE_WARNING}Turn a list of public video URLs into ads in one call: uploads each video, waits for Meta to finish processing, auto-selects a thumbnail, builds the creative, and creates the ad in the given ad set. Ads are created PAUSED by default. Per-video copy overrides the shared defaults. Up to ${MAX_TEXT_OPTIONS} primary texts, headlines and descriptions per ad (primary_texts / headlines / descriptions) become Ads Manager-style text options. Advantage+ AI features and multi-advertiser ads stay off unless requested. A video rejected by Meta does not abort the rest — every item reports its own outcome and the stage it failed at — but an expired token, rate limit or abuse signal stops the batch immediately, as does the same failure repeating (which means a shared input like page_id or ad_set_id is wrong). The whole call is capped at ${BATCH_BUDGET_MS / 1000}s so it always returns the IDs it created; videos left unprocessed come back marked "skipped", and re-running with only those is safe. Use this instead of chaining ads_upload_ad_video → ads_create_ad_creative → ads_create_ad manually.`,
+      description: `${WRITE_WARNING}Turn a list of public video URLs into ads in one call: uploads each video, waits for Meta to finish processing, auto-selects a thumbnail, builds the creative, and creates the ad in the given ad set. Ads are always created PAUSED; turn them on with ads_update_ad status ACTIVE, which the spend guard checks. Per-video copy overrides the shared defaults. Up to ${MAX_TEXT_OPTIONS} primary texts, headlines and descriptions per ad (primary_texts / headlines / descriptions) become Ads Manager-style text options. Advantage+ AI features and multi-advertiser ads stay off unless requested. A video rejected by Meta does not abort the rest — every item reports its own outcome and the stage it failed at — but an expired token, rate limit or abuse signal stops the batch immediately, as does the same failure repeating (which means a shared input like page_id or ad_set_id is wrong). The whole call is capped at ${BATCH_BUDGET_MS / 1000}s so it always returns the IDs it created; videos left unprocessed come back marked "skipped", and re-running with only those is safe. Use this instead of chaining ads_upload_ad_video → ads_create_ad_creative → ads_create_ad manually.`,
       inputSchema: {
         account_id: z.string().describe("Ad account ID"),
         ad_set_id: z.string().describe("Ad set ID that will hold the new ads"),
@@ -148,10 +148,6 @@ export function registerBulkAdTools(server: McpServer): void {
         link_url: z.string().min(1).optional().describe("Shared destination URL applied to every video without its own link_url"),
         call_to_action_type: ctaEnum.optional().describe("Shared CTA button applied to every video without its own CTA"),
         url_tags: z.string().optional().describe("Query params appended to clicked URLs (e.g. 'utm_source=meta&utm_medium=paid')"),
-        status: z
-          .enum(["ACTIVE", "PAUSED"])
-          .default("PAUSED")
-          .describe("Status of the created ads. PAUSED by default so nothing starts spending unreviewed."),
         max_wait_seconds: z
           .number()
           .min(0)
@@ -165,7 +161,7 @@ export function registerBulkAdTools(server: McpServer): void {
       account_id, ad_set_id, page_id, instagram_actor_id, videos,
       message, headline, description, primary_texts, headlines, descriptions,
       link_url, call_to_action_type, url_tags, advantage_creative, multi_advertiser_ads,
-      status, max_wait_seconds,
+      max_wait_seconds,
     }) => {
       const sharedCopy = {
         primary: resolveTextOptions(message, primary_texts, "message", "primary_texts"),
@@ -281,7 +277,7 @@ export function registerBulkAdTools(server: McpServer): void {
             name: adName,
             adset_id: adSetIdValidated,
             creative: JSON.stringify({ creative_id: creative.id }),
-            status,
+            status: "PAUSED",
           });
           result.ad_id = ad.id;
           lastFailure = undefined;
@@ -321,7 +317,7 @@ export function registerBulkAdTools(server: McpServer): void {
       if (systemicError && !leftArtifacts) throw systemicError;
 
       const lines = [
-        `Created ${created.length} of ${results.length} ad(s) in ad set ${adSetIdValidated} with status ${status}.`,
+        `Created ${created.length} of ${results.length} ad(s) in ad set ${adSetIdValidated} with status PAUSED.`,
       ];
       if (systemicError) {
         lines.push(
