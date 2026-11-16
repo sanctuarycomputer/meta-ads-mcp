@@ -151,8 +151,9 @@ describe("refusals (check 1.2, at the resolver)", () => {
     for (const name of ["nonsense", "leads", "ad-dossier:write", "help:write"]) expect(error.message).toContain(name);
   });
 
-  it("a group with no read tools refuses its read name", () => {
-    // Every allowed group has read tools at f4dbacb; check the rule itself on each group.
+  it("each allowed group's names resolve by what the group registers", () => {
+    // Every allowed group has read tools at f4dbacb, so the empty-read case is
+    // decided in toolsets-seam.test.ts on a synthetic group.
     for (const [group, entry] of Object.entries(TOOL_GROUPS)) {
       if (entry.status !== "allowed") continue;
       const { read, write } = groupTools(group);
@@ -186,6 +187,15 @@ describe("META_ADS_READ_ONLY (check 1.4)", () => {
     expect(error.problems).toEqual([
       { name: "ads:write", reason: "write name on a read-only server" },
       { name: "pixels:write", reason: "write name on a read-only server" },
+    ]);
+  });
+
+  it("=1 gives the read-only reason alongside other kinds of bad name", () => {
+    const error = refusal({ META_ADS_READ_ONLY: "1", META_ADS_TOOLSETS: "nonsense,ads:write,tokens" });
+    expect(error.problems).toEqual([
+      { name: "nonsense", reason: "unknown" },
+      { name: "ads:write", reason: "write name on a read-only server" },
+      { name: "tokens", reason: "never registered" },
     ]);
   });
 
@@ -232,6 +242,13 @@ describe("registerToolsets takes allowed groups only", () => {
   it.each(["tokens", "entities", "nonsense"])("refuses a hand-built selection naming %s", (group) => {
     const server = createMockMcpServer();
     expect(() => registerToolsets(server as never, { groups: [{ group, cls: "read" }] })).toThrow(ToolsetError);
+    expect(server._registeredTools).toEqual([]);
+  });
+
+  it("refuses a refused group after an allowed one before registering anything", () => {
+    const server = createMockMcpServer();
+    const selection = { groups: [{ group: "campaigns", cls: "read" as const }, { group: "tokens", cls: "read" as const }] };
+    expect(() => registerToolsets(server as never, selection)).toThrow(ToolsetError);
     expect(server._registeredTools).toEqual([]);
   });
 });
