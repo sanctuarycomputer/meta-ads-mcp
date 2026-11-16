@@ -11,7 +11,8 @@
  *      - a runtime probe of each handler, with argument sets built from its
  *        schema and two stub answers;
  *      - a static check, on the TypeScript syntax tree, of each read tool's
- *        registerTool call and of every function in the same file it names,
+ *        registerTool call and of everything in the same file it names
+ *        (resolved by the type checker, so by scope, not by spelling),
  *        followed transitively;
  *      - the read tools' names, pinned.
  *      What this doesn't prove: a write reached only through a function in
@@ -465,7 +466,7 @@ const insideImport = (n: ts.Node): boolean => {
 };
 
 /**
- * Every use of the client other than `metaApiClient.x` / `metaApiClient?.x` on
+ * A write helper imported under another name, and every use of the client other than `metaApiClient.x` / `metaApiClient?.x` on
  * its imported name: renamed or namespace imports of it, casts, arguments,
  * destructuring, element access, shorthand properties. Any of these could carry
  * the client out of the static check's sight, so each is refused.
@@ -474,12 +475,14 @@ function aliases(text: string): string[] {
   const sf = parse(text);
   const out: string[] = [];
   walk(sf, (n) => {
-    if (ts.isImportSpecifier(n) && (n.propertyName ?? n.name).text === "metaApiClient" && n.name.text !== "metaApiClient") {
+    if (ts.isImportSpecifier(n) && n.propertyName && n.propertyName.text !== n.name.text
+      && (n.propertyName.text === "metaApiClient" || WRITE_HELPERS.has(n.propertyName.text))) {
       out.push(n.getText());
     } else if (ts.isNamespaceImport(n) && /meta\/client(\.js)?["']$/.test(n.parent.parent.moduleSpecifier.getText())) {
       out.push(n.getText());
     } else if (ts.isIdentifier(n) && n.text === "metaApiClient" && !insideImport(n)) {
       const p = n.parent;
+      if (ts.isTypeQueryNode(p)) return; // typeof metaApiClient in a type: no value escapes
       if (!(ts.isPropertyAccessExpression(p) && p.expression === n)) out.push(p.getText().slice(0, 80));
     }
   });
@@ -499,31 +502,22 @@ function writesIn(node: ts.Node): string[] {
   return out;
 }
 
-const isFunctionValue = (e: ts.Expression | undefined): boolean => {
-  let cur = e;
-  while (cur && (ts.isParenthesizedExpression(cur) || ts.isAsExpression(cur) || ts.isSatisfiesExpression(cur))) cur = cur.expression;
-  return !!cur && (ts.isArrowFunction(cur) || ts.isFunctionExpression(cur));
-};
-
-/** Every function in a file by name: declarations, function-valued variables, properties and methods. */
-function fileFunctions(text: string): Map<string, ts.Node[]> {
-  const out = new Map<string, ts.Node[]>();
-  const add = (name: ts.Node | undefined, node: ts.Node) => {
-    if (!name || !(ts.isIdentifier(name) || ts.isStringLiteral(name))) return;
-    if (/^register\w*Tools$/.test(name.text)) return;
-    out.set(name.text, [...(out.get(name.text) ?? []), node]);
-  };
-  walk(parse(text), (n) => {
-    if (ts.isFunctionDeclaration(n) || ts.isMethodDeclaration(n)) add(n.name, n);
-    else if ((ts.isVariableDeclaration(n) || ts.isPropertyAssignment(n) || ts.isPropertyDeclaration(n)) && isFunctionValue(n.initializer)) add(n.name, n);
-  });
-  return out;
+/** A file parsed into a one-file program, so the type checker resolves each name to its own declaration. */
+type Analysed = { sf: ts.SourceFile; checker: ts.TypeChecker };
+function analyse(text: string): Analysed {
+  const file = "/probe.ts";
+  const host = ts.createCompilerHost({});
+  host.getSourceFile = (f, target) => (f === file ? ts.createSourceFile(f, text, target, true, ts.ScriptKind.TS) : undefined);
+  host.fileExists = (f) => f === file;
+  host.readFile = (f) => (f === file ? text : undefined);
+  const program = ts.createProgram([file], { noResolve: true, noLib: true, types: [], target: ts.ScriptTarget.Latest }, host);
+  return { sf: program.getSourceFile(file) as ts.SourceFile, checker: program.getTypeChecker() };
 }
 
 /** Each tool's registerTool(...) call in a file, by tool name. */
-function blocks(text: string): Map<string, ts.Node> {
+function blocks(sf: ts.SourceFile): Map<string, ts.Node> {
   const out = new Map<string, ts.Node>();
-  walk(parse(text), (n) => {
+  walk(sf, (n) => {
     if (!ts.isCallExpression(n)) return;
     const callee = n.expression;
     const named = ts.isPropertyAccessExpression(callee) ? callee.name.text : ts.isIdentifier(callee) ? callee.text : "";
@@ -533,18 +527,33 @@ function blocks(text: string): Map<string, ts.Node> {
   return out;
 }
 
-/** The node and every same-file function it names, transitively: their writes. */
-function reachableWrites(start: ts.Node, functions: Map<string, ts.Node[]>): string[] {
+/**
+ * Writes in the node and in everything in the same file it names, followed
+ * transitively by symbol: the declaration of each name (a function, class,
+ * method, accessor, variable or property, whatever its value) and every later
+ * assignment to it.
+ */
+function reachableWrites(start: ts.Node, { sf, checker }: Analysed): string[] {
+  const assigned = new Map<ts.Symbol, ts.Node[]>();
+  walk(sf, (n) => {
+    if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      const sym = checker.getSymbolAtLocation(n.left);
+      if (sym) assigned.set(sym, [...(assigned.get(sym) ?? []), n]);
+    }
+  });
   const out: string[] = [];
-  const seen = new Set<string>();
+  const seen = new Set<ts.Symbol>();
   const queue: Array<[string, ts.Node]> = [["(block)", start]];
   while (queue.length > 0) {
     const [label, node] = queue.shift() as [string, ts.Node];
     for (const w of writesIn(node)) out.push(`${label}: ${w}`);
     walk(node, (n) => {
-      if (ts.isIdentifier(n) && functions.has(n.text) && !seen.has(n.text)) {
-        seen.add(n.text);
-        for (const f of functions.get(n.text) ?? []) queue.push([n.text, f]);
+      if (!ts.isIdentifier(n) && !ts.isPrivateIdentifier(n)) return;
+      const sym = checker.getSymbolAtLocation(n);
+      if (!sym || seen.has(sym)) return;
+      seen.add(sym);
+      for (const d of [...(sym.declarations ?? []), ...(assigned.get(sym) ?? [])]) {
+        if (d.getSourceFile() === sf && !(d.pos >= node.pos && d.end <= node.end)) queue.push([sym.name, d]);
       }
     });
   }
@@ -558,22 +567,23 @@ describe("read tools' blocks call no client write method or write helper (check 
   it.each(ALLOWED_GROUPS)("%s", (stem) => {
     const text = source(`tools/${stem}.ts`);
     expect(aliases(text), `${stem}: metaApiClient used other than by member access on its own name`).toEqual([]);
-    const byName = blocks(text);
-    const functions = fileFunctions(text);
+    const analysed = analyse(text);
+    const byName = blocks(analysed.sf);
     for (const name of readByGroup.get(stem) ?? []) {
       const block = byName.get(name);
       expect(block, `${name}: no registerTool call found in tools/${stem}.ts`).toBeDefined();
       if (!block) continue;
-      expect(reachableWrites(block, functions), `${name}: writes reachable from its registration`).toEqual([]);
+      expect(reachableWrites(block, analysed), `${name}: writes reachable from its registration`).toEqual([]);
     }
   });
 });
 
 describe("the static check's parser", () => {
   const writes = (text: string, name = "t") => {
-    const block = blocks(text).get(name);
+    const analysed = analyse(text);
+    const block = blocks(analysed.sf).get(name);
     expect(block).toBeDefined();
-    return reachableWrites(block as ts.Node, fileFunctions(text));
+    return reachableWrites(block as ts.Node, analysed);
   };
   const reg = (body: string) => `server.registerTool("t", { annotations: {} }, async (a: { id: string }) => { ${body} });\n`;
   const W = "await metaApiClient.postForm('/x', {});";
@@ -590,8 +600,19 @@ describe("the static check's parser", () => {
     ["after a template literal with column-0 lines", reg("const s = `\n}\nconst x = ${'{'}`;\n" + W)],
     ["after a regex literal holding a quote", reg(`const m = /src="([^"]+)"/.exec(a.id);\n${W}`)],
     ["through optional chaining", reg("await metaApiClient?.postForm('/x', {});")],
+    ["a helper wrapped in a call", `const h = Object.assign(async () => { ${W} }, {});\n${reg("await h();")}`],
+    ["a helper held in an array", `const hs = [async () => { ${W} }];\n${reg("await hs[0]();")}`],
+    ["a class constructor", `class C { constructor() { void metaApiClient.postForm('/x', {}); } }\n${reg("new C();")}`],
+    ["a helper assigned after its declaration", `let h: () => Promise<unknown>;\nh = async () => { ${W} };\n${reg("await h();")}`],
+    ["a getter", `const o = { get h() { return metaApiClient.postForm('/x', {}); } };\n${reg("await o.h;")}`],
+    ["a helper named like a register function", `async function registerSneakTools() { ${W} }\n${reg("await registerSneakTools();")}`],
   ])("finds a write in %s", (_label, text) => {
     expect(writes(text)).not.toEqual([]);
+  });
+
+  it("follows a name to its own declaration, not to another of the same spelling", () => {
+    const text = `function other() { const result = metaApiClient.postForm('/x', {}); return result; }\n${reg("const result = 1; return result;")}`;
+    expect(writes(text)).toEqual([]);
   });
 
   it("reads a block to its end and no further, past regex and template literals", () => {
@@ -607,11 +628,12 @@ describe("the static check's parser", () => {
     ["element access", "metaApiClient['postForm']('/x', {});"],
     ["a renamed import", "import { metaApiClient as api } from \"../meta/client.js\";"],
     ["a namespace import", "import * as client from \"../meta/client.js\";"],
+    ["a renamed import of a write helper", `import { ${[...WRITE_HELPERS][0]} as h } from "../meta/post-edit.js";`],
   ])("refuses %s of the client", (_label, text) => {
     expect(aliases(text)).not.toEqual([]);
   });
 
-  it("allows member access on the imported name", () => {
-    expect(aliases("import { metaApiClient } from \"../meta/client.js\";\nmetaApiClient.get('/a');\nmetaApiClient?.get('/b');")).toEqual([]);
+  it("allows member access on the imported name, and the client's type", () => {
+    expect(aliases("import { metaApiClient } from \"../meta/client.js\";\nmetaApiClient.get('/a');\nmetaApiClient?.get('/b');\ntype C = typeof metaApiClient;")).toEqual([]);
   });
 });
