@@ -206,10 +206,10 @@ A ⚠️ marks a tool that changes live data, spends money or touches stored cre
 
 ## Credentials
 
-- `ads_list_tokens` — List the Meta tokens registered for this user.
-- `ads_set_active_token` ⚠️ — Choose which registered Meta token the session uses.
-- `ads_register_token` ⚠️ — Register a Meta System User token, encrypted at rest.
-- `ads_delete_token` ⚠️ — Delete a registered Meta token.
+- `ads_list_tokens` — Removed in this fork.
+- `ads_set_active_token` ⚠️ — Removed in this fork.
+- `ads_register_token` ⚠️ — Removed in this fork.
+- `ads_delete_token` ⚠️ — Removed in this fork.
 - `ads_register_gemini_key` ⚠️ — Store the tenant's Gemini API key, encrypted, after validating it.
 - `ads_get_gemini_key_status` — Whether a Gemini key is available and where it comes from.
 - `ads_delete_gemini_key` ⚠️ — Delete the tenant's stored Gemini key.
