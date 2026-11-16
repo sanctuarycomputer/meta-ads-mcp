@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createHmac } from "node:crypto";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 
 /**
@@ -101,31 +103,119 @@ export function mentionsCredential(text: string): boolean {
 const PAIR = /(^|[?&#;,/:\s])([A-Za-z0-9%_.\-[\]]{1,64})=([^&#;,\s"'<>]*)/g;
 
 /**
- * The process's own secrets, read on every call so a value set or changed
- * after start-up is covered: META_ACCESS_TOKEN and META_APP_SECRET, each only
- * when it is at least 8 characters, so a short or empty value cannot blank
- * ordinary text. Trimmed, as the client trims the token it sends (251).
+ * The secrets a scrub removes by value: META_ACCESS_TOKEN and META_APP_SECRET,
+ * read on every call so a value set or changed after start-up is covered, and
+ * every Page token the call holds (heldSecrets). Each is removed in every form
+ * secretForms lists, so a copy Meta or a library transformed (encoded,
+ * re-cased, signed) goes too. Forms under 8 characters are dropped, so a short
+ * or empty value cannot blank ordinary text.
  */
 const MIN_SECRET_LENGTH = 8;
 
+/**
+ * The Page tokens the current call holds. withPageToken sets it for the work
+ * it runs, so whatever that work's errors and answers carry of the token is
+ * removed wherever it is scrubbed, without the token being passed down.
+ */
+export const heldSecrets = new AsyncLocalStorage<Set<string>>();
+
+/** Runs `work` with `secret` held, on top of whatever the call already holds. */
+export function withHeldSecret<T>(secret: string, work: () => Promise<T>): Promise<T> {
+  const held = new Set(heldSecrets.getStore());
+  held.add(secret);
+  return heldSecrets.run(held, work);
+}
+
+const lowerHex = (text: string) => text.replace(/%[0-9A-F]{2}/g, (escape) => escape.toLowerCase());
+const padded = (base64: string) => base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+
+/**
+ * Every form of one secret a scrub removes: as set and trimmed (the client
+ * trims what it sends, 251), percent-encoded once and twice with either case
+ * of hex, upper- and lower-cased, base64 and base64url with and without
+ * padding, and, for a token while META_APP_SECRET is set, its appsecret_proof
+ * in either case of hex. Each form is of the trimmed value, the one Meta saw.
+ * Longest first, so a form that contains another is removed whole.
+ */
+export function secretForms(secret: string, opts: { token: boolean }): string[] {
+  // A deep scrub asks once per string: the forms (a proof is an HMAC) are
+  // kept per secret, app secret and kind, a few at a time.
+  const appSecret = opts.token ? process.env.META_APP_SECRET?.trim() : undefined;
+  const key = JSON.stringify([secret, appSecret ?? null]);
+  const known = formsCache.get(key);
+  if (known) return [...known];
+  const forms = computeForms(secret, appSecret);
+  if (formsCache.size >= MAX_CACHED_SECRETS) formsCache.clear();
+  formsCache.set(key, forms);
+  return [...forms];
+}
+
+const formsCache = new Map<string, string[]>();
+const MAX_CACHED_SECRETS = 32;
+
+function computeForms(secret: string, appSecret: string | undefined): string[] {
+  const value = secret.trim();
+  const once = encodeURIComponent(value);
+  const twice = encodeURIComponent(once);
+  const base64 = Buffer.from(value).toString("base64");
+  const base64url = Buffer.from(value).toString("base64url");
+  const forms = [
+    secret,
+    value,
+    once,
+    lowerHex(once),
+    twice,
+    // The inner escapes in lower-case hex: "%7c" encodes to "%257c".
+    encodeURIComponent(lowerHex(once)),
+    value.toUpperCase(),
+    value.toLowerCase(),
+    base64,
+    base64.replace(/=+$/, ""),
+    padded(base64url),
+    base64url,
+  ];
+  if (appSecret) {
+    const proof = createHmac("sha256", appSecret).update(value).digest("hex");
+    forms.push(proof, proof.toUpperCase());
+  }
+  return [...new Set(forms)].filter((form) => form.length >= MIN_SECRET_LENGTH).sort((a, b) => b.length - a.length);
+}
+
+/** Every form of the process's own secrets, longest first. */
 export function envSecrets(): string[] {
   const found: string[] = [];
   // Each name is read literally, so a static sweep sees every env name read.
-  for (const raw of [process.env.META_ACCESS_TOKEN, process.env.META_APP_SECRET]) {
-    if (raw === undefined) continue;
-    // Raw, trimmed, and percent-encoded (an app token carries a "|").
-    for (const value of new Set([raw, raw.trim(), encodeURIComponent(raw.trim())])) {
-      if (value.length >= MIN_SECRET_LENGTH) found.push(value);
-    }
-  }
-  // Longest first, so a secret that contains another is removed whole.
-  return found.sort((a, b) => b.length - a.length);
+  const token = process.env.META_ACCESS_TOKEN;
+  if (token !== undefined) found.push(...secretForms(token, { token: true }));
+  const appSecret = process.env.META_APP_SECRET;
+  if (appSecret !== undefined) found.push(...secretForms(appSecret, { token: false }));
+  return [...new Set(found)].sort((a, b) => b.length - a.length);
 }
 
-function removeEnvSecrets(text: string): string {
+/** Every form of every secret a scrub removes by value: the env's and the held Page tokens'. */
+function allSecretForms(): string[] {
+  const found = envSecrets();
+  for (const held of heldSecrets.getStore() ?? []) found.push(...secretForms(held, { token: true }));
+  return [...new Set(found)].sort((a, b) => b.length - a.length);
+}
+
+function removeSecrets(text: string): string {
   let out = text;
-  for (const secret of envSecrets()) out = out.split(secret).join(REDACTED);
+  for (const secret of allSecretForms()) out = out.split(secret).join(REDACTED);
   return out;
+}
+
+/**
+ * A Meta-shaped token this process does not hold: "EAA" and 30 or more
+ * letters and digits, standing alone (not inside a longer base64url word).
+ * Removed from errors and logs only, when asked: a successful answer carries
+ * advertiser text that can hold such a run, and it goes back as it was.
+ */
+const FOREIGN_TOKEN = /(?<![A-Za-z0-9_-])EAA[A-Za-z0-9]{30,}(?![A-Za-z0-9_-])/g;
+
+export interface ScrubOptions {
+  /** Also remove a Meta-shaped token the call does not hold (errors and logs). */
+  foreignTokens?: boolean;
 }
 
 /**
@@ -138,8 +228,9 @@ function removeEnvSecrets(text: string): string {
  * get through, and the value ends at the first separator so a legitimate
  * parameter after it is not swallowed.
  */
-export function scrubCredentials(text: string): string {
-  text = removeEnvSecrets(text);
+export function scrubCredentials(text: string, opts: ScrubOptions = {}): string {
+  text = removeSecrets(text);
+  if (opts.foreignTokens) text = text.replace(FOREIGN_TOKEN, REDACTED);
   if (!text.includes("=")) return text;
   return text.replace(PAIR, (match, prefix: string, name: string, value: string) => {
     if (value.length === 0 || !isCredentialName(name)) return match;
@@ -183,9 +274,9 @@ export function hasCredential(text: string): boolean {
  * strings are returned as they are. It walks with its own stack and keeps
  * each copy, so a cycle stays a cycle and no depth overflows the call stack.
  */
-export function scrubCredentialsDeep<T>(value: T, secret?: string): T {
+export function scrubCredentialsDeep<T>(value: T, secret?: string, opts: ScrubOptions = {}): T {
   const cleanString = (text: string) =>
-    scrubCredentials(secret && secret.length >= 8 ? text.split(secret).join(REDACTED) : text);
+    scrubCredentials(secret && secret.length >= 8 ? text.split(secret).join(REDACTED) : text, opts);
   const isPlain = (item: unknown): item is Record<string, unknown> | unknown[] => {
     if (Array.isArray(item)) return true;
     if (item === null || typeof item !== "object") return false;
@@ -219,6 +310,9 @@ export function scrubCredentialsDeep<T>(value: T, secret?: string): T {
   return root as T;
 }
 
+// An error is cleaned of Meta-shaped tokens the call does not hold, too.
+const FOREIGN: ScrubOptions = { foreignTokens: true };
+
 const WITHHELD = "The error's details were withheld: they could not be cleaned of credentials.";
 const MAX_CAUSES = 8;
 
@@ -242,8 +336,8 @@ function jsonOf(value: unknown): unknown {
  */
 export function scrubErrorCredentials<E>(error: E, secret?: string): E {
   try {
-    if (typeof error === "string") return scrubCredentialsDeep(error, secret);
-    if (!(error instanceof Error)) return new Error(scrubCredentialsDeep(String(error), secret)) as E;
+    if (typeof error === "string") return scrubCredentialsDeep(error, secret, FOREIGN);
+    if (!(error instanceof Error)) return new Error(scrubCredentialsDeep(String(error), secret, FOREIGN)) as E;
     return rebuilt(error, secret) as E;
   } catch {
     return new Error(WITHHELD) as E;
@@ -263,13 +357,13 @@ function causesOf(error: Error): Error[] {
 }
 
 function rebuilt(error: Error, secret: string | undefined): Error {
-  const clean = (text: unknown) => scrubCredentialsDeep(String(text), secret);
+  const clean = (text: unknown) => scrubCredentialsDeep(String(text), secret, FOREIGN);
   const message = [clean(error.message), ...causesOf(error).map((cause) => `(cause: ${clean(cause.message)})`)].join(" ");
   if (error instanceof McpError) {
     const prefix = `MCP error ${error.code}: `;
     let data: unknown;
     try {
-      data = scrubCredentialsDeep(jsonOf(error.data), secret);
+      data = scrubCredentialsDeep(jsonOf(error.data), secret, FOREIGN);
     } catch {
       data = undefined;
     }

@@ -21,6 +21,8 @@ import { RealWriteGate, callContext, type CallContext, type WriteGate } from "./
 // while a Page action runs). It is cleaned before anything classifies, logs
 // or returns it.
 const withoutToken = scrubCredentialsDeep;
+// An error also loses a Meta-shaped token the call does not hold; an answer never does.
+const ERROR_SCRUB = { foreignTokens: true };
 
 const DEFAULT_BASE_URL = "https://graph.facebook.com";
 const DEFAULT_TIMEOUT = 30000;
@@ -875,7 +877,7 @@ export class MetaApiClient {
         }
 
         if (isMetaApiError(body)) {
-          const metaError = scope?.withholdMessage ? withheld(body.error) : withoutToken(body.error, token);
+          const metaError = scope?.withholdMessage ? withheld(body.error) : withoutToken(body.error, token, ERROR_SCRUB);
           const classification = classifyMetaError(metaError);
           this.logMetaError(metaError, classification, context, path);
 
@@ -943,7 +945,7 @@ export class MetaApiClient {
           throw scrubErrorCredentials(error, token);
         }
 
-        lastError = error instanceof Error ? scrubErrorCredentials(error, token) : new Error(withoutToken(String(error), token));
+        lastError = error instanceof Error ? scrubErrorCredentials(error, token) : new Error(withoutToken(String(error), token, ERROR_SCRUB));
         if (canRetryTransport && attempt < maxRetries) {
           await this.backoff(attempt);
           continue;
