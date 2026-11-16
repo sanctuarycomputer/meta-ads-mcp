@@ -286,6 +286,11 @@ export function resolveToolsets(env: Readonly<Record<string, string | undefined>
 
 /** Registers only the selected groups' tools of the selected class, exclusions applied. */
 export function registerToolsets(server: McpServer, selection: ToolsetSelection): void {
+  for (const { group } of selection.groups) {
+    if (!Object.hasOwn(TOOL_GROUPS, group) || TOOL_GROUPS[group].status !== "allowed") {
+      throw new ToolsetError(`not an allowed tool group: ${group}`, [{ name: group, reason: "not allowed" }]);
+    }
+  }
   for (const { group, cls } of selection.groups) {
     const filter = toolFilter(server, (name, annotations) =>
       !EXCLUDED_TOOLS.has(name) && classOf(annotations) === cls);

@@ -1,9 +1,12 @@
 /**
  * META_ADS_TOOLSETS: which tool groups a server registers (ticket 252,
- * spec checks 1.1 and 1.3-1.6; check 1.2, the refusals through src/index.ts,
- * is at the end of this file).
+ * spec checks 1.1 and 1.3-1.6, and check 1.2 at the resolver; the
+ * "registers nothing" rule on synthetic groups is in toolsets-seam.test.ts).
  */
 import { describe, it, expect } from "vitest";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import {
   TOOL_GROUPS,
@@ -122,6 +125,14 @@ describe("refusals (check 1.2, at the resolver)", () => {
     ["kept out, write", "billing:write", "kept out"],
     ["no write tools", "accounts:write", "registers nothing"],
     ["no write tools (insights)", "insights:write", "registers nothing"],
+    ["prototype key", "__proto__", "unknown"],
+    ["inherited key", "constructor", "unknown"],
+    ["inherited key, write", "toString:write", "unknown"],
+    ["inner space", "camp aigns", "unknown"],
+    ["space before suffix", "campaigns :write", "unknown"],
+    ["upper-case suffix", "campaigns:WRITE", "unknown"],
+    ["doubled suffix", "campaigns:write:write", "unknown"],
+    ["suffix alone", ":write", "unknown"],
   ])("refuses a %s name and names it", (_label, name, reason) => {
     const error = refusal({ META_ADS_TOOLSETS: `accounts,${name}` });
     expect(error.problems).toEqual([{ name, reason }]);
@@ -170,9 +181,12 @@ describe("the default and the empty list (check 1.3)", () => {
 });
 
 describe("META_ADS_READ_ONLY (check 1.4)", () => {
-  it("=1 refuses a :write name and names it", () => {
-    const error = refusal({ META_ADS_READ_ONLY: "1", META_ADS_TOOLSETS: "campaigns,ads:write" });
-    expect(error.problems).toEqual([{ name: "ads:write", reason: "write name on a read-only server" }]);
+  it("=1 refuses every :write name and names each", () => {
+    const error = refusal({ META_ADS_READ_ONLY: "1", META_ADS_TOOLSETS: "campaigns,ads:write,pixels:write" });
+    expect(error.problems).toEqual([
+      { name: "ads:write", reason: "write name on a read-only server" },
+      { name: "pixels:write", reason: "write name on a read-only server" },
+    ]);
   });
 
   it("=1 accepts read names and the default", () => {
@@ -194,6 +208,31 @@ describe("list syntax (check 1.5)", () => {
     expect(registered({ META_ADS_TOOLSETS: " campaigns , ,campaigns,, pixels:write " })).toEqual(
       [...groupTools("campaigns").read, ...groupTools("pixels").write].sort(),
     );
+  });
+});
+
+describe("on a real McpServer", () => {
+  it("registers exactly the selection, so the filter calls the server as itself", async () => {
+    const server = new McpServer({ name: "t", version: "0" });
+    registerToolsets(server, resolveToolsets({ META_ADS_TOOLSETS: "campaigns,adsets:write" }));
+    const client = new Client({ name: "c", version: "0" });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(b), client.connect(a)]);
+    try {
+      const names = (await client.listTools()).tools.map((t) => t.name).sort();
+      expect(names).toEqual([...groupTools("campaigns").read, ...groupTools("adsets").write.filter((n) => n !== "ads_clone_ad_set_bundle")].sort());
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+});
+
+describe("registerToolsets takes allowed groups only", () => {
+  it.each(["tokens", "entities", "nonsense"])("refuses a hand-built selection naming %s", (group) => {
+    const server = createMockMcpServer();
+    expect(() => registerToolsets(server as never, { groups: [{ group, cls: "read" }] })).toThrow(ToolsetError);
+    expect(server._registeredTools).toEqual([]);
   });
 });
 
