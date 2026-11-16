@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { createServer } from "../../src/server.js";
+import { CATALOGUE, createServer } from "../../src/server.js";
 import { getSkillDocuments } from "../../src/skills/loader.js";
 
 /** Runs a client against a real in-memory server, so this covers the wire shape. */
 async function withClient<T>(work: (client: Client) => Promise<T>): Promise<T> {
-  const server = createServer();
+  const server = createServer(CATALOGUE);
   const client = new Client({ name: "test-client", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);

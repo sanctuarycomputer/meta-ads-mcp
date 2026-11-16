@@ -2,10 +2,10 @@ import { describe, it, expect } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { createServer } from "../src/server.js";
+import { CATALOGUE, createServer } from "../src/server.js";
 
 async function listPublishedTools(): Promise<Tool[]> {
-  const server = createServer();
+  const server = createServer(CATALOGUE);
   const client = new Client({ name: "test-client", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -26,20 +26,20 @@ async function listPublishedTools(): Promise<Tool[]> {
 
 describe("createServer", () => {
   it("creates a server instance", () => {
-    const server = createServer();
+    const server = createServer(CATALOGUE);
     expect(server).toBeDefined();
   });
 
   it("returns an McpServer with name and version", () => {
-    const server = createServer();
+    const server = createServer(CATALOGUE);
     // McpServer stores server info internally
     expect(server).toHaveProperty("connect");
     expect(server).toHaveProperty("tool");
   });
 
   it("creates independent server instances", () => {
-    const server1 = createServer();
-    const server2 = createServer();
+    const server1 = createServer(CATALOGUE);
+    const server2 = createServer(CATALOGUE);
     expect(server1).not.toBe(server2);
   });
 });

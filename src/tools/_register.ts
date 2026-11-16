@@ -1,3 +1,4 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 
 /**
@@ -56,3 +57,21 @@ export const APIFY_WRITE_WARNING = "⚠️ Uses your Apify account (paid credits
 
 /** Same, for Gemini-backed tools: these spend the tenant's Gemini quota or touch their stored key. */
 export const GEMINI_WRITE_WARNING = "⚠️ Uses your Gemini API key (paid quota / stored credentials). ";
+
+/**
+ * The only face of the server a tool group sees when toolsets are in force
+ * (ticket 252): one method, `registerTool`, which hands a tool to the real
+ * server only when `admit` says so and drops it otherwise. It is a plain
+ * object, not a Proxy and not linked to McpServer's prototype, so a group
+ * calling `tool`, `registerPrompt` or anything else throws instead of
+ * registering past the filter.
+ */
+export function toolFilter(
+  server: McpServer,
+  admit: (name: string, annotations: ToolAnnotations | undefined) => boolean,
+): Pick<McpServer, "registerTool"> {
+  const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
+  const registerTool = (name: string, config: { annotations?: ToolAnnotations }, handler: unknown): unknown =>
+    admit(name, config.annotations) ? register(name, config, handler) : undefined;
+  return { registerTool: registerTool as unknown as McpServer["registerTool"] };
+}
