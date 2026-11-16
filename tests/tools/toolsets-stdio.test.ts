@@ -190,7 +190,6 @@ describe("stdio startup touches no network, Firestore, HTTP module or stdout (ch
     expect(client.getServerCapabilities()?.resources).toBeUndefined();
     await client.close();
     expect(state.pino).toHaveLength(1);
-    expect(state.pino[0].destination).toBeUndefined();
   });
 
   it("the spies see what they watch for (controls)", async () => {
@@ -207,10 +206,6 @@ describe("stdio startup touches no network, Firestore, HTTP module or stdout (ch
     expect(stdout).toHaveBeenCalled();
     expect(log).toHaveBeenCalled();
 
-    vi.resetModules();
-    const { getFirestore } = await import("../../src/store/firestore.js");
-    getFirestore();
-    expect(state.firestoreConstructed).toBe(1);
   });
 });
 

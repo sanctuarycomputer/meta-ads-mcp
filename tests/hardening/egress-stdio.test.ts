@@ -8,13 +8,15 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { installEgressSpies, sampleArgs, tokenOf, type EgressSpies, type JSONSchema } from "./egress-helpers.js";
+import { installEgressSpies, sampleArgs, tokenOf, type EgressSpies, type JSONSchema, type Override } from "./egress-helpers.js";
 import { fakeSecret, OTHER, SECRET, TOKEN } from "./fake-secrets.js";
+import { envReads, fetchNames, moduleLoads, normaliseSpecifier } from "./static-sweep.js";
 import { createMockMcpServer } from "../setup.js";
 
 const oauthCalls = vi.hoisted(() => ({ load: 0, exchange: 0 }));
@@ -41,11 +43,20 @@ const SDK_TIMEOUT_MS = 600_000;
 const PER_CALL_MS = 10_000;
 const realSetTimeout = globalThis.setTimeout;
 
-/** Per-tool arguments where the schema alone cannot reach Meta. */
-const OVERRIDES: Record<string, Record<string, unknown>> = {
+/**
+ * Per-tool arguments where the schema alone cannot reach Meta. None drops a
+ * URL argument without another URL argument staying in the call.
+ */
+const OVERRIDES: Record<string, Override> = {
   ads_boost_ig_post: { call_to_action_type: "LEARN_MORE" },
-  ads_clone_ad_set_bundle: { dry_run: true },
-  ads_create_ad_creative: { page_id: "123" },
+  // Each sampled creative override (it carries image/link URLs) names its source.
+  ads_clone_ad_set_bundle: (a) => ({
+    ...a,
+    dry_run: true,
+    creative_overrides: (a.creative_overrides as Array<Record<string, unknown>> | undefined)?.map((o) => ({ ...o, source_ad_id: "123" })),
+  }),
+  // One layout at a time: the single-image ad (image_url, link_url, site_links) stays; the other layouts go.
+  ads_create_ad_creative: { page_id: "123", cards: undefined, dynamic_creative: undefined, language_variants: undefined },
   ads_create_ad_study: {
     start_time: "2026-10-01",
     end_time: "2026-10-15",
@@ -55,7 +66,8 @@ const OVERRIDES: Record<string, Record<string, unknown>> = {
     ],
   },
   ads_create_custom_audience: { customer_file_source: "USER_PROVIDED_ONLY" },
-  ads_generate_preview: { page_id: "123" },
+  // The simple fields (image_url, link_url) stay; the raw creative spec goes.
+  ads_generate_preview: { page_id: "123", creative: undefined },
   ads_get_ad_creatives: { ad_id: "123" },
   ads_get_targeting_description: { ad_id: "123" },
   ads_update_ad: { status: "PAUSED" },
@@ -81,10 +93,19 @@ const ENV: Record<string, string> = {
 const savedEnv: Record<string, string | undefined> = {};
 const savedArgv = process.argv;
 
+/** §5.3's groups (design stacksbot-runs-meta-ads §5.3), as 252 names them. */
+const SECTION_53_GROUPS = [
+  "accounts", "campaigns", "adsets", "ads", "creatives", "insights", "targeting",
+  "audiences", "abtesting", "pixels", "instagram", "previews", "diagnostics",
+];
+
 let spies: EgressSpies;
 let client: Client;
-let closeAll: () => Promise<void>;
+const closers: Array<() => Promise<void>> = [];
+/** Every tool (252's CATALOGUE), and what §5.3's read and write servers list. */
 let tools: Tool[] = [];
+let readTools: Tool[] = [];
+let writeTools: Tool[] = [];
 
 /** Each tool's requests and DNS lookups, attributed after its call settles. */
 const perTool = new Map<string, { requests: EgressSpies["requests"]; dns: string[]; args: Record<string, unknown>; said: string }>();
@@ -93,49 +114,59 @@ function realTurn(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-async function connect(): Promise<void> {
-  const { createServer } = await import("../../src/server.js");
-  const server = createServer();
-  client = new Client({ name: "egress-test", version: "1.0.0" });
+async function connect(server: McpServer): Promise<Client> {
+  const c = new Client({ name: "egress-test", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-  closeAll = async () => {
-    await client.close();
+  await Promise.all([server.connect(serverTransport), c.connect(clientTransport)]);
+  closers.push(async () => {
+    await c.close();
     await server.close();
-  };
+  });
+  return c;
 }
 
-async function listAll(): Promise<Tool[]> {
+async function listAll(c: Client): Promise<Tool[]> {
   const out: Tool[] = [];
   let cursor: string | undefined;
   do {
-    const page = await client.listTools({ cursor });
+    const page = await c.listTools({ cursor });
     out.push(...page.tools);
     cursor = page.nextCursor;
   } while (cursor);
   return out;
 }
 
+/**
+ * Starts the server on 252's full catalogue (every tool, called below), and
+ * §5.3's read server (META_ADS_TOOLSETS unset: the read-only default) and
+ * write server (each §5.3 group and its `:write` half, where it has one).
+ */
+async function startServers(): Promise<void> {
+  const { createServer, CATALOGUE, toolsetPlanFromEnv } = await import("../../src/server.js");
+  const { ToolsetError } = await import("../../src/tools/index.js");
+  client = await connect(createServer(CATALOGUE));
+  tools = await listAll(client);
+  readTools = await listAll(await connect(createServer(toolsetPlanFromEnv({}))));
+  let names = SECTION_53_GROUPS.flatMap((g) => [g, `${g}:write`]);
+  let plan;
+  try {
+    plan = toolsetPlanFromEnv({ META_ADS_TOOLSETS: names.join(",") });
+  } catch (err) {
+    if (!(err instanceof ToolsetError)) throw err;
+    // A group with no write tools refuses its `:write` half by name.
+    const refused = new Set(err.problems.map((p) => p.name));
+    names = names.filter((n) => !refused.has(n));
+    plan = toolsetPlanFromEnv({ META_ADS_TOOLSETS: names.join(",") });
+  }
+  writeTools = await listAll(await connect(createServer(plan)));
+}
+
 async function groupToolNames(): Promise<Set<string>> {
-  const mods = await Promise.all([
-    import("../../src/tools/accounts.js").then((m) => m.registerAccountTools),
-    import("../../src/tools/campaigns.js").then((m) => m.registerCampaignTools),
-    import("../../src/tools/adsets.js").then((m) => m.registerAdSetTools),
-    import("../../src/tools/ads.js").then((m) => m.registerAdTools),
-    import("../../src/tools/creatives.js").then((m) => m.registerCreativeTools),
-    import("../../src/tools/insights.js").then((m) => m.registerInsightsTools),
-    import("../../src/tools/targeting.js").then((m) => m.registerTargetingTools),
-    import("../../src/tools/audiences.js").then((m) => m.registerAudienceTools),
-    import("../../src/tools/abtesting.js").then((m) => m.registerABTestingTools),
-    import("../../src/tools/pixels.js").then((m) => m.registerPixelTools),
-    import("../../src/tools/instagram.js").then((m) => m.registerInstagramTools),
-    import("../../src/tools/previews.js").then((m) => m.registerPreviewTools),
-    import("../../src/tools/diagnostics.js").then((m) => m.registerDiagnosticTools),
-  ]);
+  const { TOOL_GROUPS } = await import("../../src/tools/index.js");
   const names = new Set<string>();
-  for (const register of mods) {
+  for (const group of SECTION_53_GROUPS) {
     const server = createMockMcpServer();
-    register(server as never);
+    TOOL_GROUPS[group].register(server as never);
     for (const t of server._registeredTools) names.add(t.name);
   }
   return names;
@@ -150,11 +181,12 @@ beforeAll(async () => {
   const { tokenManager } = await import("../../src/auth/token-manager.js");
   tokenManager.resetForTests();
   spies = installEgressSpies();
-  await connect();
-});
+  await startServers();
+  // Loading every tool module under a busy suite can pass the 10 s default.
+}, 120_000);
 
 afterAll(async () => {
-  await closeAll?.();
+  for (const close of closers) await close();
   spies?.restore();
   globalThis.setTimeout = realSetTimeout;
   process.argv = savedArgv;
@@ -165,9 +197,13 @@ afterAll(async () => {
 });
 
 describe("stdio egress (done-whens 2, 5)", () => {
-  it("server start makes no request", async () => {
-    tools = await listAll();
-    expect(tools.length).toBeGreaterThan(50);
+  it("server start makes no request, for the catalogue and §5.3's read and write servers", async () => {
+    expect(tools.length).toBeGreaterThan(150);
+    const all = new Set(tools.map((t) => t.name));
+    expect(readTools.length).toBeGreaterThan(20);
+    expect(writeTools.length).toBeGreaterThan(readTools.length);
+    // Every tool the §5.3 servers serve is one the run below calls.
+    for (const t of [...readTools, ...writeTools]) expect(all.has(t.name), t.name).toBe(true);
     expect(spies.connects).toEqual([]);
     expect(spies.dns).toEqual([]);
     expect(spies.requests).toEqual([]);
@@ -217,7 +253,18 @@ describe("stdio egress (done-whens 2, 5)", () => {
       } finally {
         globalThis.setTimeout = realSetTimeout;
       }
+      // Whatever a call left running and recorded after its own window (the
+      // last tool's especially) is checked here, over the whole run.
+      await realTurn();
+      await realTurn();
+      const allArgs = JSON.stringify([...perTool.values()].map((t) => t.args));
+      for (const host of spies.connects) expect(host, "a connect after its tool's window").toBe(GRAPH);
+      for (const r of spies.requests) expect(r.url.host, "a request after its tool's window").toBe(GRAPH);
+      for (const host of spies.dns) expect(host === GRAPH || allArgs.includes(host), `late lookup of ${host}`).toBe(true);
       expect(perTool.size).toBe(tools.length);
+      // A caller URL under an optional parent is sent too (the lead form's
+      // cover image), so the run sees the lookup a tool makes for it.
+      expect(JSON.stringify(perTool.get("ads_create_lead_form")?.args.context_card)).toContain("cdn.example.test");
       expect(oauthCalls.load).toBe(0);
       expect(oauthCalls.exchange).toBe(0);
     },
@@ -276,42 +323,6 @@ function walk(dir: string): string[] {
 const SRC = path.join(root, "src");
 const rel = (file: string) => path.relative(root, file).split(path.sep).join("/");
 
-/** Block comments and whole-line comments out; a `//` inside a string stays. */
-function code(file: string): string {
-  return readFileSync(file, "utf8")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^\s*\/\/.*$/gm, "");
-}
-
-/** Value module specifiers (type-only imports and exports don't count), and non-literal loads. */
-function specifiersOf(text: string): { specs: string[]; dynamic: string[] } {
-  const specs: string[] = [];
-  const dynamic: string[] = [];
-  const fromRe = /\b(import|export)\s+(type\s+)?([^;'"]*?)\s*from\s*['"]([^'"]+)['"]/g;
-  for (const m of text.matchAll(fromRe)) {
-    if (m[2]) continue;
-    const list = m[3].match(/^\{([\s\S]*)\}$/);
-    if (list) {
-      const items = list[1].split(",").map((s) => s.trim()).filter(Boolean);
-      if (items.length > 0 && items.every((s) => s.startsWith("type "))) continue;
-    }
-    specs.push(m[4]);
-  }
-  for (const m of text.matchAll(/\bimport\s*['"]([^'"]+)['"]/g)) specs.push(m[1]);
-  for (const m of text.matchAll(/\b(?:import|require)\s*\(\s*([^)]*?)\s*\)/g)) {
-    const lit = m[1].match(/^['"`]([^'"`$]+)['"`]$/);
-    if (lit) specs.push(lit[1]);
-    else dynamic.push(m[0]);
-  }
-  return { specs, dynamic };
-}
-
-function normalise(spec: string): string {
-  const bare = spec.replace(/^node:/, "");
-  if (bare.startsWith("@")) return bare.split("/").slice(0, 2).join("/");
-  return bare.split("/")[0];
-}
-
 const FORBIDDEN = new Set(["http", "https", "net", "tls", "http2", "dgram", "dns", "child_process", "undici", "@google-cloud/firestore", "express"]);
 const ALLOWED: Record<string, string[]> = {
   "src/utils/url-guard.ts": ["dns", "net"],
@@ -322,22 +333,20 @@ describe("static egress sweeps", () => {
   it("no network module outside the allowlist", () => {
     const hits: string[] = [];
     for (const file of walk(SRC)) {
-      const { specs, dynamic } = specifiersOf(code(file));
+      const { specs, dynamic } = moduleLoads(file, readFileSync(file, "utf8"));
       for (const d of dynamic) hits.push(`${rel(file)}: non-literal load ${d}`);
-      for (const s of specs) {
-        const mod = normalise(s);
-        if (FORBIDDEN.has(mod) && !(ALLOWED[rel(file)] ?? []).includes(mod)) hits.push(`${rel(file)}: ${s}`);
+      for (const spec of specs) {
+        const mod = normaliseSpecifier(spec);
+        if (FORBIDDEN.has(mod) && !(ALLOWED[rel(file)] ?? []).includes(mod)) hits.push(`${rel(file)}: ${spec}`);
       }
     }
     expect(hits).toEqual([]);
   });
 
   it("fetch only in the Meta client and OAuth", () => {
-    const re = /\bfetch\s*\(|\bdoFetch\b|\bconfig\.fetch\b|\bdeps\.fetch\b/;
     const hits = walk(SRC)
       .filter((f) => !rel(f).startsWith("src/meta/") && rel(f) !== "src/auth/meta-oauth.ts")
-      .filter((f) => re.test(code(f)))
-      .map(rel);
+      .flatMap((f) => fetchNames(f, readFileSync(f, "utf8")).map((h) => `${rel(f)}: ${h}`));
     expect(hits).toEqual([]);
   });
 
@@ -347,17 +356,13 @@ describe("static egress sweeps", () => {
       path.join(SRC, "auth/token-manager.ts"),
     ];
     const names = new Set<string>();
-    const bare: string[] = [];
+    const opaque: string[] = [];
     for (const file of files) {
-      const text = code(file);
-      for (const m of text.matchAll(/process\.env\.([A-Za-z_][A-Za-z0-9_]*)/g)) names.add(m[1]);
-      for (const m of text.matchAll(/process\.env\[\s*['"]([^'"]+)['"]\s*\]/g)) names.add(m[1]);
-      for (const m of text.matchAll(/\benv\.([A-Z_][A-Z0-9_]*)/g)) names.add(m[1]);
-      // Any other use of process.env (a computed key, a spread, the whole
-      // object passed on) hides which names are read.
-      for (const m of text.matchAll(/process\.env(?!\.[A-Za-z_]|\[\s*['"])/g)) bare.push(`${rel(file)}: ${text.slice(m.index, m.index + 24)}`);
+      const found = envReads(file, readFileSync(file, "utf8"));
+      for (const n of found.names) names.add(n);
+      for (const o of found.opaque) opaque.push(`${rel(file)}: ${o}`);
     }
-    expect(bare).toEqual([]);
+    expect(opaque).toEqual([]);
     expect([...names].sort()).toEqual(["META_ACCESS_TOKEN", "META_APP_SECRET", "PATH"]);
   });
 

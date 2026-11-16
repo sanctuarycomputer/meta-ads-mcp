@@ -44,6 +44,15 @@ describe.each([
     expect(claim.status).toBe("duplicate");
   });
 
+  it.each(["completed", "failed"] as const)("never takes over a stale record that is %s", async (state) => {
+    await staleRunWithAd("k");
+    await getCloneBundleStore().update("k", { state });
+
+    const claim = await getCloneBundleStore().claim("k", "sig");
+
+    expect(claim.status).toBe("duplicate");
+  });
+
   it("never takes over a run, however stale, when asked not to", async () => {
     await staleRunWithAd("k");
 

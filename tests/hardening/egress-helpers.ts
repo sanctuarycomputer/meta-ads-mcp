@@ -199,7 +199,7 @@ function sampleValue(schema: JSONSchema, name: string): unknown {
         const hit = PATTERN_CANDIDATES.find((c) => re.test(c));
         return hit ?? "x";
       }
-      if (schema.format === "uri" || name.endsWith("_url")) return "https://cdn.example.test/a.jpg";
+      if (isUrlish(name, schema)) return "https://cdn.example.test/a.jpg";
       // The schemas carry no id patterns: an id is shaped by its name.
       if (/^(ad_)?account_ids?$/.test(name)) return "act_1";
       if (/(^|_)ids?$/.test(name)) return "123";
@@ -222,19 +222,39 @@ function sampleValue(schema: JSONSchema, name: string): unknown {
   }
 }
 
+/** A property that carries a caller URL: named `url`, `*_url(s)`, `*Url`, or of format uri. */
+function isUrlish(name: string, schema: JSONSchema): boolean {
+  return schema.format === "uri" || /(^|_)urls?$/i.test(name) || /Urls?$/.test(name);
+}
+
+/** Whether a URL-carrying property sits anywhere below this schema. */
+function holdsUrl(schema: JSONSchema, depth = 0): boolean {
+  if (depth > 6) return false;
+  const branches = [...(schema.anyOf ?? []), ...(schema.oneOf ?? []), ...(schema.allOf ?? [])];
+  if (schema.items) branches.push(schema.items);
+  for (const [name, sub] of Object.entries(schema.properties ?? {})) {
+    if (isUrlish(name, sub) || holdsUrl(sub, depth + 1)) return true;
+  }
+  return branches.some((b) => holdsUrl(b, depth + 1));
+}
+
 /**
- * Required properties only, plus every property whose name ends in `_url`
- * (so the egress run sees caller URLs). Overrides replace whole top-level
- * values.
+ * Required properties, plus every property that is or holds a caller URL at
+ * any depth (so the egress run sees every URL a tool could forward or look
+ * up). Overrides replace whole top-level values.
  */
-export function sampleArgs(schema: JSONSchema, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+export type Override = Record<string, unknown> | ((sampled: Record<string, unknown>) => Record<string, unknown>);
+
+/** An override key set to undefined drops that key; a function rewrites the sampled arguments. */
+export function sampleArgs(schema: JSONSchema, override: Override = {}): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   const props = schema.properties ?? {};
   const required = new Set(schema.required ?? []);
   for (const [name, sub] of Object.entries(props)) {
-    if (required.has(name) || name.endsWith("_url")) out[name] = sampleValue(sub, name);
+    if (required.has(name) || isUrlish(name, sub) || holdsUrl(sub)) out[name] = sampleValue(sub, name);
   }
-  return { ...out, ...overrides };
+  const merged = typeof override === "function" ? override(out) : { ...out, ...override };
+  return Object.fromEntries(Object.entries(merged).filter(([, v]) => v !== undefined));
 }
 
 /** Reads the access token a Graph request carries, wherever the client put it. */
