@@ -4,7 +4,8 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -80,6 +81,61 @@ describe.skipIf(process.platform !== "linux")("M9: readLocalUpload", () => {
     expect(await codeOf(() => readLocalUpload(root, "big.png", { maxBytes: 10 }))).toBe("too-large");
     expect(await codeOf(() => readLocalUpload(root, "big.png", { maxBytes: LOCAL_UPLOAD_MAX_BYTES + 1 }))).toBe("bad-option");
     expect(await codeOf(() => readLocalUpload(root, "big.png", { maxBytes: 0 }))).toBe("bad-option");
+  });
+
+  it("accepts a file of exactly maxBytes", async () => {
+    writeFileSync(path.join(root, "ten.png"), Buffer.alloc(10, 7));
+    const got = await readLocalUpload(root, "ten.png", { maxBytes: 10 });
+    expect(got.size).toBe(10);
+  });
+
+  it("reads a small file under the largest maxBytes without allocating it", async () => {
+    writeFileSync(path.join(root, "a.png"), Buffer.from([1, 2, 3]));
+    const got = await readLocalUpload(root, "a.png", { maxBytes: LOCAL_UPLOAD_MAX_BYTES });
+    expect(got.size).toBe(3);
+    expect(got.bytes.buffer.byteLength).toBeLessThan(1024 * 1024);
+  });
+
+  it("refuses a non-integer maxBytes", async () => {
+    writeFileSync(path.join(root, "a.png"), "x");
+    expect(await codeOf(() => readLocalUpload(root, "a.png", { maxBytes: 1.5 }))).toBe("bad-option");
+  });
+
+  it("refuses a FIFO without blocking", async () => {
+    const fifo = path.join(root, "pipe.png");
+    expect(spawnSync("mkfifo", [fifo]).status).toBe(0);
+    expect(await codeOf(() => readLocalUpload(root, "pipe.png"))).toBe("not-regular");
+  }, 3_000);
+
+  it("names a nested file by its last segment", async () => {
+    mkdirSync(path.join(root, "d", "e"), { recursive: true });
+    writeFileSync(path.join(root, "d", "e", "a.png"), "x");
+    expect((await readLocalUpload(root, "d/e/a.png")).name).toBe("a.png");
+  });
+
+  it("accepts a root that is itself a symlink", async () => {
+    writeFileSync(path.join(root, "a.png"), "x");
+    const link = path.join(base, "root-link");
+    symlinkSync(root, link);
+    expect((await readLocalUpload(link, "a.png")).size).toBe(1);
+  });
+
+  it("closes the descriptor on success and on refusal", async () => {
+    writeFileSync(path.join(root, "a.png"), "x");
+    mkdirSync(path.join(root, "sub"));
+    const before = readdirSync("/proc/self/fd").length;
+    await readLocalUpload(root, "a.png");
+    await codeOf(() => readLocalUpload(root, "sub"));
+    expect(readdirSync("/proc/self/fd").length).toBe(before);
+  });
+
+  it("refuses a missing file or root without naming the path", async () => {
+    for (const work of [() => readLocalUpload(root, "missing.png"), () => readLocalUpload(path.join(base, "nope"), "a.png")]) {
+      const err = await work().catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(LocalUploadError);
+      expect((err as LocalUploadError).code).toBe("not-found");
+      expect((err as Error).message).not.toContain(base);
+    }
   });
 
   it("refuses when the descriptor's real path differs", async () => {

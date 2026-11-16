@@ -5,8 +5,8 @@ import { UnsafeUrlError } from "./url-guard.js";
 
 /**
  * Host allowlist by suffix (".fbcdn.net" also matches "fbcdn.net" itself).
- * Applied to the first hop and to every redirect so a permitted host cannot
- * bounce the request elsewhere.
+ * With the downloaders gone (254 M9/M10) this only screens a URL against a
+ * list; video delivery passes the empty list, which refuses every host.
  */
 export function assertAllowedHost(url: URL, suffixes: string[], what = "media"): void {
   const host = url.hostname.toLowerCase();
