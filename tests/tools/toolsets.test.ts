@@ -1,9 +1,10 @@
 /**
  * META_ADS_TOOLSETS: which tool groups a server registers (ticket 252,
- * spec checks 1.1 and 1.3-1.6, and check 1.2 at the resolver; the
- * "registers nothing" rule on synthetic groups is in toolsets-seam.test.ts).
+ * spec checks 1.1-1.6; check 1.2 both at the resolver and through
+ * src/index.ts with each transport; the "registers nothing" rule on synthetic
+ * groups is in toolsets-seam.test.ts).
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -16,6 +17,22 @@ import {
 } from "../../src/tools/index.js";
 import { toolFilter } from "../../src/tools/_register.js";
 import { createMockMcpServer } from "../setup.js";
+
+// For the src/index.ts cases (check 1.2): both transports' start functions are
+// spies, and the logger is a no-op so loading the entry point starts no pino worker.
+const launched = vi.hoisted(() => ({ started: [] as string[] }));
+vi.mock("../../src/transport/stdio.js", () => ({
+  startStdioTransport: vi.fn(async () => void launched.started.push("stdio")),
+}));
+vi.mock("../../src/transport/http.js", () => ({
+  startHttpTransport: vi.fn(async () => void launched.started.push("http")),
+}));
+vi.mock("pino", () => {
+  const logger: Record<string, unknown> = {};
+  for (const k of ["trace", "debug", "info", "warn", "error", "fatal"]) logger[k] = () => {};
+  logger.child = () => logger;
+  return { default: Object.assign(() => logger, { destination: () => ({}), stdTimeFunctions: {}, stdSerializers: {} }) };
+});
 
 /** The read tools the unset default registers, pinned (spec check 1.3). */
 const DEFAULT_READ_TOOLS = [
@@ -281,4 +298,76 @@ describe("the filter (check 1.6)", () => {
     filter.registerTool("t", { description: "x", annotations }, async () => ({ content: [] }));
     expect(seen).toEqual([["t", annotations]]);
   });
+});
+
+// ─── check 1.2 through src/index.ts ─────────────────────────────────────────
+
+class Exit extends Error {
+  constructor(readonly code: number | undefined) {
+    super(`process.exit(${code})`);
+  }
+}
+
+describe("refusals through src/index.ts (check 1.2)", () => {
+  const saved = { argv: process.argv, toolsets: process.env.META_ADS_TOOLSETS, readOnly: process.env.META_ADS_READ_ONLY };
+  afterEach(() => {
+    process.argv = saved.argv;
+    for (const [k, v] of [["META_ADS_TOOLSETS", saved.toolsets], ["META_ADS_READ_ONLY", saved.readOnly]] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    vi.restoreAllMocks();
+  });
+
+  async function launch(transport: string, toolsets: string, readOnly?: string) {
+    process.argv = ["node", "dist/index.js", "--transport", transport];
+    process.env.META_ADS_TOOLSETS = toolsets;
+    if (readOnly === undefined) delete process.env.META_ADS_READ_ONLY;
+    else process.env.META_ADS_READ_ONLY = readOnly;
+    launched.started = [];
+    vi.resetModules();
+    let stderr = "";
+    vi.spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
+      stderr += String(chunk);
+      return true;
+    }) as typeof process.stderr.write);
+    const exit = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Exit(code);
+    }) as typeof process.exit);
+    let thrown: unknown;
+    try {
+      await import("../../src/index.js");
+    } catch (error) {
+      thrown = error;
+    }
+    await new Promise((r) => setTimeout(r, 0)); // let a wrongly started main() run
+    return { thrown, stderr, exits: exit.mock.calls.map((c) => c[0]), started: [...launched.started] };
+  }
+
+  const cases: Array<[string, string, string[], string?]> = [
+    ["an unknown name", "campaigns,nope", ["nope (unknown)"]],
+    ["a never name", "tokens", ["tokens (never registered)"]],
+    ["a kept-out name", "billing:write", ["billing:write (kept out)"]],
+    ["a name that registers nothing", "help:write", ["help:write (registers nothing)"]],
+    ["a write name on a read-only server", "campaigns:write", ["campaigns:write (write name on a read-only server)"], "1"],
+    ["a mixed list", "nope,tokens,campaigns,billing,help:write", ["nope (unknown)", "tokens (never registered)", "billing (kept out)", "help:write (registers nothing)"]],
+  ];
+
+  for (const transport of ["stdio", "http"]) {
+    it.each(cases)(`--transport ${transport}: %s exits 2 before either transport starts, naming each bad name`, async (_label, toolsets, named, readOnly) => {
+      const out = await launch(transport, toolsets, readOnly);
+      expect(out.thrown).toBeInstanceOf(Exit);
+      expect(out.exits).toEqual([2]);
+      expect(out.started).toEqual([]);
+      expect(out.stderr.trim().split("\n")).toHaveLength(1);
+      for (const n of named) expect(out.stderr).toContain(n);
+    });
+
+    it(`--transport ${transport}: a good list starts that transport (control)`, async () => {
+      const out = await launch(transport, "campaigns");
+      expect(out.thrown).toBeUndefined();
+      expect(out.exits).toEqual([]);
+      expect(out.started).toEqual([transport]);
+    });
+  }
 });
