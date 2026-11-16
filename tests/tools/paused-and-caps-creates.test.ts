@@ -135,6 +135,33 @@ describe("266: single-request creates always send PAUSED", () => {
     expect(text(result)).not.toContain("ads_activate_entity");
   });
 
+  it("ads_boost_ig_post's lost-answer reply points at the guarded update", async () => {
+    let posted = false;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const { pathname: path, searchParams } = new URL(url);
+      if (init?.method === "POST") { posted = true; throw new TypeError("fetch failed"); }
+      if (/\/2001\/ads$/.test(path)) {
+        const tag = JSON.parse(searchParams.get("filtering")!)[0].value as string;
+        return mockFetchResponse({ data: posted ? [{ id: "5009", name: `Earlier ${tag}`, creative: { id: "4009" } }] : [] });
+      }
+      if (/\/2001$/.test(path)) return mockFetchResponse({ id: "2001", account_id: "123" });
+      if (/\/1784$/.test(path)) return mockFetchResponse({ id: "1784", media_type: "IMAGE", media_product_type: "FEED", boost_eligibility_info: { eligible_to_boost: true } });
+      return mockFetchResponse({ error: { code: 100, message: "Unsupported get request." } }, { status: 400 });
+    }));
+    const result = await toolOf(registerInstagramTools, "ads_boost_ig_post").handler({
+      account_id: "123", ad_set_id: "2001", instagram_media_id: "1784", instagram_account_id: "1780",
+    });
+    expect(text(result)).toMatch(/answer was lost, but the ad exists/);
+    expect(text(result)).toContain("ads_update_ad status ACTIVE");
+    expect(text(result)).not.toContain("ads_activate_entity");
+  });
+
+  it("ads_delete_ad's dynamic-creative refusal points at the ad set update, not ads_activate_entity", async () => {
+    recordingFetch([[/\/3001$/, { id: "3001", adset: { id: "2001", is_dynamic_creative: true } }]]);
+    await expect(toolOf(registerAdTools, "ads_delete_ad").handler({ ad_id: "3001" }))
+      .rejects.toThrow(/ads_update_ad_set status PAUSED/);
+  });
+
   describe("create schemas have no status input", () => {
     const cases: Array<[string, Register, Record<string, unknown>]> = [
       ["ads_create_campaign", registerCampaignTools, CAMPAIGN_ARGS],

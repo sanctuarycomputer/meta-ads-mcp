@@ -176,6 +176,18 @@ describe("266: copy paths always create PAUSED", () => {
     }));
   });
 
+  it("ads_clone_ad_set_bundle's signature says PAUSED even when a direct caller passes ACTIVE", async () => {
+    routeFetch(CLONE_ROUTES);
+    const claim = vi.spyOn(getCloneBundleStore(), "claim");
+    await clone().handler({
+      account_id: "act_123", source_ad_set_id: "2099",
+      target_ad_set: { name: "T", geo_override: { countries: ["CL"] }, status: "ACTIVE" },
+      creative_overrides: [], dry_run: false, idempotency_key: "k2",
+    });
+    expect(String(claim.mock.calls[0][1])).toContain('"status":"PAUSED"');
+    expect(String(claim.mock.calls[0][1])).not.toContain("ACTIVE");
+  });
+
   describe("copy schemas have no status input", () => {
     it("ads_duplicate_ad has no status input", () => {
       expect("status" in (duplicate().schema as Record<string, unknown>)).toBe(false);
