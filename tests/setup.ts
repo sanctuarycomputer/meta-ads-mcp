@@ -31,11 +31,16 @@ export function fakeFirestore(): Firestore {
   } as unknown as Firestore;
 }
 
+/** The app secret the tests sign with: every Graph request needs one. */
+export const TEST_APP_SECRET = "test-app-secret";
+
 /**
- * Set a META_ACCESS_TOKEN env var so getAccessToken() doesn't throw.
+ * Set META_ACCESS_TOKEN so getAccessToken() doesn't throw, and
+ * META_APP_SECRET so requests can be signed with appsecret_proof.
  */
 export function setupTestToken(token = "test-access-token"): void {
   process.env.META_ACCESS_TOKEN = token;
+  process.env.META_APP_SECRET = TEST_APP_SECRET;
 }
 
 /**
@@ -43,6 +48,18 @@ export function setupTestToken(token = "test-access-token"): void {
  */
 export function cleanupTestToken(): void {
   delete process.env.META_ACCESS_TOKEN;
+  delete process.env.META_APP_SECRET;
+}
+
+/** The token a request sent, read from its `Authorization: Bearer` header. */
+export function bearerTokenOf(init?: RequestInit): string | null {
+  const headers = init?.headers;
+  if (!headers) return null;
+  const value = headers instanceof Headers
+    ? headers.get("authorization")
+    : Object.entries(headers as Record<string, string>).find(([name]) => name.toLowerCase() === "authorization")?.[1];
+  const match = /^Bearer (.+)$/.exec(value ?? "");
+  return match ? match[1] : null;
 }
 
 /**

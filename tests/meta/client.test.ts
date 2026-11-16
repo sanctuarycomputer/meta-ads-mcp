@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { MetaApiClient } from "../../src/meta/client.js";
-import { setupTestToken, cleanupTestToken, mockFetchResponse } from "../setup.js";
+import { setupTestToken, cleanupTestToken, mockFetchResponse, bearerTokenOf } from "../setup.js";
 import { tokenManager } from "../../src/auth/token-manager.js";
 import { hashToken, requestContext } from "../../src/auth/token-store.js";
 import { logger } from "../../src/utils/logger.js";
@@ -12,7 +12,7 @@ describe("MetaApiClient", () => {
     setupTestToken();
     tokenManager.resetForTests();
     client = new MetaApiClient({
-      apiVersion: "v26.0",
+      apiVersion: "v27.0",
       baseUrl: "https://graph.facebook.com",
       timeout: 5000,
       maxRetries: 0,
@@ -27,7 +27,7 @@ describe("MetaApiClient", () => {
   });
 
   describe("constructor", () => {
-    it("sends requests to Graph API v26.0 when no version is configured", async () => {
+    it("sends requests to Graph API v27.0 when no version is configured", async () => {
       vi.stubEnv("META_API_VERSION", undefined);
       const defaultClient = new MetaApiClient({ maxRetries: 0 });
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockFetchResponse({ data: [] })));
@@ -35,36 +35,31 @@ describe("MetaApiClient", () => {
       await defaultClient.get("/me/adaccounts");
 
       const url = new URL(vi.mocked(fetch).mock.calls[0][0] as string);
-      expect(url.pathname).toBe("/v26.0/me/adaccounts");
+      expect(url.pathname).toBe("/v27.0/me/adaccounts");
     });
 
     it("refuses a configured API version that is not a plain version", () => {
-      expect(() => new MetaApiClient({ apiVersion: "v26.0/../v22.0" })).toThrow(/v26\.0/);
+      expect(() => new MetaApiClient({ apiVersion: "v27.0/../v22.0" })).toThrow(/v27\.0/);
     });
 
     it("sends requests to the version in META_API_VERSION when it is set", async () => {
-      vi.stubEnv("META_API_VERSION", "v25.0");
+      vi.stubEnv("META_API_VERSION", "v27.0");
       const envClient = new MetaApiClient({ maxRetries: 0 });
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockFetchResponse({ data: [] })));
 
       await envClient.get("/me/adaccounts");
 
       const url = new URL(vi.mocked(fetch).mock.calls[0][0] as string);
-      expect(url.pathname).toBe("/v25.0/me/adaccounts");
+      expect(url.pathname).toBe("/v27.0/me/adaccounts");
     });
 
-    it("respects custom API version", async () => {
-      const customClient = new MetaApiClient({
-        apiVersion: "v21.0",
-        maxRetries: 0,
-      });
+    it("refuses a configured API version other than v27.0", () => {
+      expect(() => new MetaApiClient({ apiVersion: "v21.0", maxRetries: 0 })).toThrow(/v27\.0/);
+    });
 
-      const mockResponse = mockFetchResponse({ data: [] });
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse));
-
-      await customClient.get("/me/adaccounts");
-      const fetchCall = vi.mocked(fetch).mock.calls[0];
-      expect(fetchCall[0]).toContain("v21.0");
+    it("refuses a META_API_VERSION other than v27.0", () => {
+      vi.stubEnv("META_API_VERSION", "v26.0");
+      expect(() => new MetaApiClient({ maxRetries: 0 })).toThrow(/v27\.0/);
     });
   });
 
@@ -74,7 +69,7 @@ describe("MetaApiClient", () => {
   describe("deprecated version warnings", () => {
     const autoUpgraded = () => mockFetchResponse({ data: [] }, {
       headers: {
-        "X-Ad-Api-Version-Warning": "The call has been auto-upgraded to v27.0 as v26.0 has been deprecated",
+        "X-Ad-Api-Version-Warning": "The call has been auto-upgraded to v28.0 as v27.0 has been deprecated",
       },
     });
 
@@ -89,9 +84,9 @@ describe("MetaApiClient", () => {
       );
       expect(versionWarning?.[0]).toEqual({
         event: "meta_api_version_auto_upgraded",
-        apiVersion: "v26.0",
+        apiVersion: "v27.0",
       });
-      expect(versionWarning?.[1]).toContain("auto-upgraded to v27.0");
+      expect(versionWarning?.[1]).toContain("auto-upgraded to v28.0");
       expect(versionWarning?.[1]).not.toContain("123456789012345");
     });
 
@@ -132,9 +127,11 @@ describe("MetaApiClient", () => {
 
       expect(result).toEqual({ id: "123", name: "Test" });
       const url = new URL(vi.mocked(fetch).mock.calls[0][0] as string);
-      expect(url.pathname).toBe("/v26.0/123");
+      expect(url.pathname).toBe("/v27.0/123");
       expect(url.searchParams.get("fields")).toBe("id,name");
-      expect(url.searchParams.get("access_token")).toBe("test-access-token");
+      expect(url.searchParams.has("access_token")).toBe(false);
+      expect(url.searchParams.get("appsecret_proof")).toMatch(/^[0-9a-f]{64}$/);
+      expect(bearerTokenOf(vi.mocked(fetch).mock.calls[0][1])).toBe("test-access-token");
     });
 
     it("omits undefined params", async () => {
