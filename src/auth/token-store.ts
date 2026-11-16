@@ -8,12 +8,10 @@ export interface RequestContext {
 }
 
 /**
- * AsyncLocalStorage to thread the Meta access token from the Express
- * middleware through to the MetaApiClient without passing it explicitly.
- *
- * In multi-tenant HTTP mode the middleware resolves the token from
- * Firestore (decrypting + auto-refreshing if needed) and stores the
- * plaintext here together with the fbUserId and tokenName.
+ * AsyncLocalStorage to thread a per-call Meta access token through to the
+ * MetaApiClient without passing it explicitly. In this stdio-only fork its
+ * writer is page-token.ts (a Page token for one call); the HTTP middleware
+ * that resolved tenant tokens is removed (254 M5).
  */
 export const requestContext = new AsyncLocalStorage<RequestContext>();
 
@@ -21,9 +19,9 @@ export const requestContext = new AsyncLocalStorage<RequestContext>();
  * Get the current request's access token.
  *
  * Priority:
- *  1. AsyncLocalStorage context (per-request, set by HTTP middleware)
- *  2. TokenManager active token (multi-token registry / legacy)
- *  3. META_ACCESS_TOKEN env var (legacy fallback)
+ *  1. AsyncLocalStorage context (a Page token for one call, page-token.ts)
+ *  2. TokenManager active token (254 M4: META_ACCESS_TOKEN, read once)
+ *  3. META_ACCESS_TOKEN env var, read now (set after the manager loaded)
  */
 export function getAccessToken(): string {
   // Each source is trimmed here, once, so the value sent, signed, hashed and
@@ -48,7 +46,7 @@ export function getAccessToken(): string {
   }
 
   throw new Error(
-    "No Meta access token available. Connect via Meta OAuth, register a token, or set META_ACCESS_TOKEN.",
+    "No Meta access token available. Set META_ACCESS_TOKEN.",
   );
 }
 

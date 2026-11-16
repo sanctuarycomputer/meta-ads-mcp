@@ -25,7 +25,9 @@ describe("M4: one token", () => {
   });
 
   it("registerToken refuses", () => {
-    expect(() => tokenManager.registerToken("x", OTHER)).toThrow(/^removed in this fork:/);
+    expect(() => tokenManager.registerToken("x", OTHER)).toThrow(
+      /^removed in this fork: tokens come only from META_ACCESS_TOKEN$/,
+    );
     expect(tokenManager.getActiveToken()).toBe(TOKEN);
     expect(tokenManager.listTokens().available).toEqual(["default"]);
   });
@@ -42,6 +44,16 @@ describe("M4: one token", () => {
       expect(masked).not.toContain(TOKEN.slice(i, i + 3));
     }
     expect(masked).toBe("[masked]");
+  });
+
+  it("has no token and no active name when META_ACCESS_TOKEN is unset", () => {
+    delete process.env.META_ACCESS_TOKEN;
+    tokenManager.resetForTests();
+    expect(tokenManager.getActiveToken()).toBeNull();
+    expect(tokenManager.getActiveTokenName()).toBeNull();
+    expect(tokenManager.hasTokens()).toBe(false);
+    expect(tokenManager.listTokens()).toEqual({ active: null, available: [] });
+    expect(() => getAccessToken()).toThrow(/^No Meta access token available\. Set META_ACCESS_TOKEN\.$/);
   });
 
   it("does not read META_TOKENS", () => {

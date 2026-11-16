@@ -59,6 +59,12 @@ describe("getAccessToken", () => {
     expect(requestContext.run({ accessToken: "" }, () => getAccessToken())).toBe("");
   });
 
+  it("falls back to the env token when the context carries no token string", () => {
+    process.env.META_ACCESS_TOKEN = "env-token";
+    const ctx = { fbUserId: "u1" } as unknown as { accessToken: string };
+    expect(requestContext.run(ctx, () => getAccessToken())).toBe("env-token");
+  });
+
   it("throws when no token is available", () => {
     expect(() => getAccessToken()).toThrow(
       /No Meta access token available/,
