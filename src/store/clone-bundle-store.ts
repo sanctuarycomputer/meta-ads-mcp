@@ -1,7 +1,3 @@
-import { Firestore } from "@google-cloud/firestore";
-import { getFirestore, isFirestoreEnabled } from "./firestore.js";
-import { logger } from "../utils/logger.js";
-
 export interface CloneBundleCreatedResources {
   adSetId?: string;
   // On the native-copy clone path, ad creatives are duplicated server-side by
@@ -23,7 +19,6 @@ export interface CloneBundleRecord {
   lastError?: string;
 }
 
-const COLLECTION = "clone_bundle_operations";
 export const STALE_IN_PROGRESS_MS = 15 * 60 * 1000;
 
 export interface ClaimOptions {
@@ -67,49 +62,10 @@ class InMemoryStore {
   }
 }
 
-class FirestoreStore {
-  readonly persistent = true;
-  constructor(private readonly db: Firestore) {}
-
-  private docRef(key: string) {
-    return this.db.collection(COLLECTION).doc(encodeURIComponent(key));
-  }
-
-  async getDoc(key: string): Promise<CloneBundleRecord | undefined> {
-    const snap = await this.docRef(key).get();
-    return snap.exists ? (snap.data() as CloneBundleRecord) : undefined;
-  }
-
-  async claim(key: string, signature: string, options: ClaimOptions = {}): Promise<{ status: "claimed" | "duplicate"; existing?: CloneBundleRecord }> {
-    const ref = this.docRef(key);
-    return this.db.runTransaction(async (tx) => {
-      const snap = await tx.get(ref);
-      if (snap.exists) {
-        const existing = snap.data() as CloneBundleRecord;
-        if (!canReclaim(existing, options)) {
-          return { status: "duplicate", existing };
-        }
-        logger.warn({ cacheKey: key, startedAt: existing.startedAt }, "Reclaiming stale clone bundle lock");
-      }
-      const fresh: CloneBundleRecord = {
-        cacheKey: key,
-        signature,
-        state: "in_progress",
-        startedAt: Date.now(),
-        createdResources: { creativeIds: [], adIds: [] },
-      };
-      tx.set(ref, fresh);
-      return { status: "claimed" };
-    });
-  }
-
-  async update(key: string, partial: Partial<CloneBundleRecord>): Promise<void> {
-    await this.docRef(key).set(partial, { merge: true });
-  }
-}
-
 export interface CloneBundleStore {
   // Whether records outlive this process and are shared by every instance.
+  // Always false in this fork (254 M6: no Firestore), so ads_duplicate_ad
+  // refuses a real run.
   readonly persistent: boolean;
   getDoc(key: string): Promise<CloneBundleRecord | undefined>;
   claim(key: string, signature: string, options?: ClaimOptions): Promise<{ status: "claimed" | "duplicate"; existing?: CloneBundleRecord }>;
@@ -120,10 +76,15 @@ let cachedStore: CloneBundleStore | undefined;
 
 export function getCloneBundleStore(): CloneBundleStore {
   if (cachedStore) return cachedStore;
-  cachedStore = isFirestoreEnabled() ? new FirestoreStore(getFirestore()) : new InMemoryStore();
+  cachedStore = new InMemoryStore();
   return cachedStore;
 }
 
-export function resetCloneBundleStoreForTests(db?: Firestore): void {
-  cachedStore = db ? new FirestoreStore(db) : undefined;
+export function resetCloneBundleStoreForTests(): void {
+  cachedStore = undefined;
+}
+
+/** Tests only: installs a store (a persistent double exercises a real ads_duplicate_ad run). */
+export function configureCloneBundleStoreForTests(store: CloneBundleStore): void {
+  cachedStore = store;
 }

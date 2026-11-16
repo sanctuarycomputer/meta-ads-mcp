@@ -6,9 +6,9 @@ import { z } from "zod";
 import { registerSocialProofTools } from "../../src/tools/social-proof.js";
 import { registerAdSetTools } from "../../src/tools/adsets.js";
 import { metaApiClient } from "../../src/meta/client.js";
-import { getCloneBundleStore, resetCloneBundleStoreForTests } from "../../src/store/clone-bundle-store.js";
+import { configureCloneBundleStoreForTests, getCloneBundleStore } from "../../src/store/clone-bundle-store.js";
 import { resetAccountCurrencyCacheForTests } from "../../src/meta/account-currency.js";
-import { cleanupTestToken, createMockMcpServer, fakeFirestore, mockFetchResponse, setupTestToken } from "../setup.js";
+import { cleanupTestToken, createMockMcpServer, persistentCloneBundleStore, mockFetchResponse, setupTestToken } from "../setup.js";
 
 type TextResult = { content: Array<{ type: string; text: string }> };
 
@@ -84,7 +84,7 @@ describe("266: copy paths always create PAUSED", () => {
     setupTestToken();
     metaApiClient.resetForTests();
     resetAccountCurrencyCacheForTests();
-    resetCloneBundleStoreForTests(fakeFirestore());
+    configureCloneBundleStoreForTests(persistentCloneBundleStore());
   });
 
   afterEach(() => {

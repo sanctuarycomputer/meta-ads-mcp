@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { registerSocialProofTools } from "../../src/tools/social-proof.js";
 import { metaApiClient } from "../../src/meta/client.js";
-import { getCloneBundleStore, resetCloneBundleStoreForTests, STALE_IN_PROGRESS_MS } from "../../src/store/clone-bundle-store.js";
-import { createMockMcpServer, setupTestToken, cleanupTestToken, mockFetchResponse, fetchCallSummary, fakeFirestore } from "../setup.js";
+import { configureCloneBundleStoreForTests, getCloneBundleStore, resetCloneBundleStoreForTests, STALE_IN_PROGRESS_MS } from "../../src/store/clone-bundle-store.js";
+import { createMockMcpServer, setupTestToken, cleanupTestToken, mockFetchResponse, fetchCallSummary, persistentCloneBundleStore } from "../setup.js";
 
 type ToolResult = { content: Array<{ text: string }> };
 
@@ -305,7 +305,7 @@ describe("ads_duplicate_ad", () => {
   beforeEach(() => {
     setupTestToken();
     metaApiClient.resetForTests();
-    resetCloneBundleStoreForTests(fakeFirestore());
+    configureCloneBundleStoreForTests(persistentCloneBundleStore());
   });
 
   afterEach(() => {
@@ -550,7 +550,7 @@ describe("ads_duplicate_ad", () => {
 
   it("never takes a numeric ad ID JavaScript cannot hold exactly as the new ad", async () => {
     for (const keep of [true, false]) {
-      resetCloneBundleStoreForTests(fakeFirestore());
+      configureCloneBundleStoreForTests(persistentCloneBundleStore());
       const answer = mockFetchResponse({});
       answer.text = async () => '{"id": 9007199254740993, "copied_ad_id": 9007199254740993}';
       answer.json = async () => JSON.parse(await answer.text());

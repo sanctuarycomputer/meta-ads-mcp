@@ -10,7 +10,6 @@ import {
   InMemoryApifyTokenRepo,
   configureApifyTokenRepoForTests,
 } from "../../src/store/apify-token-repo.js";
-import { resetKeyCacheForTests } from "../../src/auth/crypto.js";
 
 // Kept under the 20-char suffix that .gitleaks.toml's apify-api-token rule
 // matches, so this fixture never trips the secret scanner.
@@ -18,8 +17,6 @@ const TOKEN = "apify_api_testfixture";
 
 describe("apify client", () => {
   beforeEach(() => {
-    process.env.TOKEN_ENCRYPTION_KEY = "b".repeat(64);
-    resetKeyCacheForTests();
     configureApifyTokenRepoForTests(new InMemoryApifyTokenRepo());
     process.env.APIFY_TOKEN = TOKEN;
   });
@@ -27,8 +24,6 @@ describe("apify client", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     delete process.env.APIFY_TOKEN;
-    delete process.env.TOKEN_ENCRYPTION_KEY;
-    resetKeyCacheForTests();
     configureApifyTokenRepoForTests(undefined);
   });
 

@@ -1,10 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { getCloneBundleStore, resetCloneBundleStoreForTests, STALE_IN_PROGRESS_MS } from "../../src/store/clone-bundle-store.js";
-import { fakeFirestore } from "../setup.js";
 
 describe.each([
   ["in memory", () => resetCloneBundleStoreForTests(), false],
-  ["in Firestore", () => resetCloneBundleStoreForTests(fakeFirestore()), true],
 ])("clone bundle store (%s)", (_name, reset, persistent) => {
   beforeEach(() => {
     reset();

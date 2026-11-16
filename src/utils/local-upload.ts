@@ -61,7 +61,8 @@ function segmentsOf(relativePath: string): string[] {
   return segments;
 }
 
-function maxBytesOf(opts: { maxBytes?: number } | undefined): number {
+/** The byte limit a read uses: the caller's maxBytes, or the default; refuses one out of range. */
+export function resolveLocalUploadMaxBytes(opts: { maxBytes?: number } | undefined): number {
   const maxBytes = opts?.maxBytes ?? LOCAL_UPLOAD_DEFAULT_MAX_BYTES;
   if (!Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > LOCAL_UPLOAD_MAX_BYTES) {
     throw new LocalUploadError("bad-option", `maxBytes must be an integer from 1 to ${LOCAL_UPLOAD_MAX_BYTES}.`);
@@ -96,7 +97,7 @@ export async function readLocalUpload(
   opts?: { maxBytes?: number },
 ): Promise<LocalUpload> {
   const segments = segmentsOf(relativePath);
-  const maxBytes = maxBytesOf(opts);
+  const maxBytes = resolveLocalUploadMaxBytes(opts);
   try {
     return await readChecked(root, segments, maxBytes);
   } catch (err) {

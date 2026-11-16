@@ -46,12 +46,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@google-cloud/firestore": "^9.2.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "cookie-parser": "^1.4.7",
-    "cors": "^2.8.5",
-    "express": "^5.2.1",
-    "jose": "^6.2.12",
     "pino": "^9.6.0",
     "zod": "^4.6.5"
   },
@@ -61,9 +56,6 @@
     }
   },
   "devDependencies": {
-    "@types/cookie-parser": "^1.4.10",
-    "@types/cors": "^2.8.17",
-    "@types/express": "^5.0.0",
     "@types/node": "^22.20.4",
     "eslint": "^10.11.0",
     "tsx": "^4.23.15",

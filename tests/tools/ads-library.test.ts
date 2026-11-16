@@ -5,7 +5,6 @@ import {
   InMemoryApifyTokenRepo,
   configureApifyTokenRepoForTests,
 } from "../../src/store/apify-token-repo.js";
-import { resetKeyCacheForTests } from "../../src/auth/crypto.js";
 import { createMockMcpServer } from "../setup.js";
 import { configureDatasetLookupForTests, createDatasetLookup } from "../../src/apify/dataset-lookup.js";
 
@@ -44,8 +43,6 @@ describe("ads_library_* tools", () => {
   let repo: InMemoryApifyTokenRepo;
 
   beforeEach(() => {
-    process.env.TOKEN_ENCRYPTION_KEY = "c".repeat(64);
-    resetKeyCacheForTests();
     repo = new InMemoryApifyTokenRepo();
     configureApifyTokenRepoForTests(repo);
     process.env.APIFY_TOKEN = TOKEN;
@@ -56,8 +53,6 @@ describe("ads_library_* tools", () => {
     vi.unstubAllGlobals();
     configureDatasetLookupForTests(undefined);
     delete process.env.APIFY_TOKEN;
-    delete process.env.TOKEN_ENCRYPTION_KEY;
-    resetKeyCacheForTests();
     configureApifyTokenRepoForTests(undefined);
   });
 

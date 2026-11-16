@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerGeminiKeyTools, type GeminiKeyToolDeps } from "../../src/tools/gemini-keys.js";
 import { InMemoryGeminiKeyRepo, configureGeminiKeyRepoForTests, type GeminiKeyRepo } from "../../src/store/gemini-key-repo.js";
-import { resetKeyCacheForTests } from "../../src/auth/crypto.js";
 import { createMockMcpServer } from "../setup.js";
 
 const KEY = "AQ.test_gemini_fixture_key_000";
@@ -25,17 +24,13 @@ function setup(overrides: Partial<GeminiKeyToolDeps> = {}) {
 
 describe("gemini key tools", () => {
   beforeEach(() => {
-    process.env.TOKEN_ENCRYPTION_KEY = "a".repeat(64);
-    resetKeyCacheForTests();
     delete process.env.GEMINI_API_KEY;
     delete process.env.META_APP_ID;
     delete process.env.META_APP_SECRET;
   });
 
   afterEach(() => {
-    delete process.env.TOKEN_ENCRYPTION_KEY;
     delete process.env.GEMINI_API_KEY;
-    resetKeyCacheForTests();
     configureGeminiKeyRepoForTests(undefined);
     vi.restoreAllMocks();
   });

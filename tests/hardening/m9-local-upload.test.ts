@@ -2,18 +2,21 @@
  * M9: the local-file reader 253 wires into the upload tools. Every refusal
  * asserts its code, so each guard has a case only it decides.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { promises as fsp } from "node:fs";
 import { appendFileSync, chmodSync, mkdtempSync, mkdirSync, readdirSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   __localUploadSeamsForTests as seams,
+  LOCAL_UPLOAD_DEFAULT_MAX_BYTES,
   LOCAL_UPLOAD_MAX_BYTES,
   LocalUploadError,
   readLocalUpload,
+  resolveLocalUploadMaxBytes,
 } from "../../src/utils/local-upload.js";
 
 const original = { ...seams };
@@ -38,6 +41,8 @@ async function codeOf(work: () => Promise<unknown>): Promise<string> {
     await work();
   } catch (err) {
     expect(err).toBeInstanceOf(LocalUploadError);
+    // No refusal may carry a path: the message reaches the caller.
+    expect((err as Error).message).not.toContain(base);
     return (err as LocalUploadError).code;
   }
   throw new Error("expected a refusal");
@@ -219,11 +224,52 @@ describe.skipIf(process.platform !== "linux")("M9: readLocalUpload", () => {
     expect(await codeOf(() => readLocalUpload(root, "a.png"))).toBe("fd-mismatch");
   });
 
+  it("refuses a descriptor path that is another file under the root", async () => {
+    writeFileSync(path.join(root, "a.png"), "x");
+    writeFileSync(path.join(root, "b.png"), "y");
+    const realRoot = await fsp.realpath(root);
+    seams.readFdPath = async () => path.join(realRoot, "b.png");
+    expect(await codeOf(() => readLocalUpload(root, "a.png"))).toBe("fd-mismatch");
+  });
+
+  it("asks for at most 1 MiB per read", async () => {
+    writeFileSync(path.join(root, "big.png"), Buffer.alloc(3 * 1024 * 1024 + 5, 7));
+    const probe = await fsp.open(path.join(root, "big.png"), "r");
+    const proto = Object.getPrototypeOf(probe) as { read: (...args: unknown[]) => unknown };
+    await probe.close();
+    const asked: number[] = [];
+    const real = proto.read;
+    const spy = vi.spyOn(proto, "read").mockImplementation(function (this: unknown, ...args: unknown[]) {
+      const [buf, , length] = args as [Buffer, number, number];
+      asked.push(typeof length === "number" ? length : buf.length);
+      return real.apply(this, args);
+    });
+    try {
+      const got = await readLocalUpload(root, "big.png");
+      expect(got.size).toBe(3 * 1024 * 1024 + 5);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(asked.length).toBeGreaterThan(3);
+    expect(Math.max(...asked)).toBeLessThanOrEqual(1024 * 1024);
+  });
+
   it("refuses without /proc", async () => {
     writeFileSync(path.join(root, "a.png"), "x");
     seams.readFdPath = async () => {
       throw Object.assign(new Error("no proc"), { code: "ENOENT" });
     };
     expect(await codeOf(() => readLocalUpload(root, "a.png"))).toBe("no-proc");
+  });
+});
+
+describe("M9: readLocalUpload limits (spec: 100 MB default, 4 GB cap)", () => {
+  it("defaults to 100 MB and caps at 4 GB", () => {
+    expect(LOCAL_UPLOAD_DEFAULT_MAX_BYTES).toBe(100 * 1024 * 1024);
+    expect(LOCAL_UPLOAD_MAX_BYTES).toBe(4 * 1024 ** 3);
+    expect(resolveLocalUploadMaxBytes(undefined)).toBe(100 * 1024 * 1024);
+    expect(resolveLocalUploadMaxBytes({})).toBe(100 * 1024 * 1024);
+    expect(resolveLocalUploadMaxBytes({ maxBytes: 4 * 1024 ** 3 })).toBe(4 * 1024 ** 3);
+    expect(() => resolveLocalUploadMaxBytes({ maxBytes: 4 * 1024 ** 3 + 1 })).toThrow(LocalUploadError);
   });
 });
