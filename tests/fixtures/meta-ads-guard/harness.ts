@@ -124,6 +124,7 @@ const GRAPH_TYPE: Readonly<Record<string, string>> = {
   other: "unknown_thing",
 };
 
+const UNREADABLE_ID = "9998000000000999";
 const isObj = (x: unknown): x is Obj => x !== null && typeof x === "object" && !Array.isArray(x);
 const digits = (act: string | null): string | undefined => (act ? act.replace(/^act_/, "") : undefined);
 // An object without its null or undefined values: Graph leaves out a field it has no value for.
@@ -201,7 +202,12 @@ export function scenarioFor(fixture: HarnessFixture): Scenario {
     d.identity.find((e) => e.field === field && e.via === via);
 
   // ---- params ----
-  const leaf = (path: string, via: string): unknown => entryFor(path, via)?.id ?? "x";
+  // An identity field sent with no entry in the fixture: an id no GET can read (identity-key-no-entry).
+  const isIdentity = (path: string): boolean =>
+    PAGE_FIELDS.has(path) || IG_FIELDS.has(path) || LEAD_FIELDS.has(path) || PIXEL_FIELDS.has(path) ||
+    path === "object_story_id" || path === "source_instagram_media_id";
+  const leaf = (path: string, via: string): unknown =>
+    entryFor(path, via)?.id ?? (isIdentity(path) ? UNREADABLE_ID : "x");
   const bounded = (key: string, prefix: string, via: string): unknown => {
     const value: Obj = {};
     for (const k of keys) {

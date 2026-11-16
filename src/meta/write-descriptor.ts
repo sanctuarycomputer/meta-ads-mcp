@@ -1054,6 +1054,56 @@ function assertReadable(params: Readonly<Obj>): void {
   }
 }
 
+// The keys a study body cell may carry: the ones the builder reads, and scalars that name no object.
+const CELL_ID_LISTS = ["campaigns", "adsets"] as const;
+const CELL_SCALARS = ["id", "name", "description", "treatment_percentage", "control_percentage"];
+const STATUS_OPTIONS = ["ACTIVE", "PAUSED", "INHERITED_FROM_SOURCE"];
+
+// A request value that names a Graph object must be one: a value present but unreadable refuses, never drops.
+function requestId(key: string, value: unknown): string {
+  const id = graphId(value);
+  if (id === null) throw new WriteRefusal(`${key} is not an id`);
+  return id;
+}
+
+// Every request value the builder reads, checked before any GET (T4-1, T4-3): identity ids, an attached
+// creative, parent and destination ids, study cells, status, status_option and the end time. A key present
+// with a value of the wrong shape refuses; one absent is left to the rules.
+function assertRequestValues(params: Readonly<Obj>): void {
+  for (const field of IDENTITY_FIELDS.direct) for (const v of valuesAt(params, field.split("."))) requestId(field, v);
+  if (has(params, "creative_id")) requestId("creative_id", params.creative_id);
+  if (isObj(params.creative)) {
+    const creative = params.creative;
+    for (const field of IDENTITY_FIELDS.creative) {
+      for (const v of valuesAt(creative, field.split("."))) requestId(`creative.${field}`, v);
+    }
+    if (has(creative, "creative_id")) requestId("creative.creative_id", creative.creative_id);
+  }
+  for (const key of ["campaign_id", "adset_id"]) if (has(params, key)) requestId(key, params[key]);
+  if (has(params, "status") && statusOf(params.status) === null) throw new WriteRefusal("status is not a status");
+  if (has(params, "status_option") && !STATUS_OPTIONS.includes(params.status_option as string)) {
+    throw new WriteRefusal("status_option is not a status option");
+  }
+  for (const key of ["end_time", "stop_time"]) {
+    if (has(params, key) && strOrNull(params[key]) === null && !Number.isSafeInteger(params[key])) {
+      throw new WriteRefusal(`${key} is not a time`);
+    }
+  }
+  for (const cell of Array.isArray(params.cells) ? (params.cells as Obj[]) : []) {
+    for (const [k, v] of Object.entries(cell)) {
+      if ((CELL_ID_LISTS as readonly string[]).includes(k)) {
+        if (!Array.isArray(v)) throw new WriteRefusal(`cells.${k} is not a list of ids`);
+        for (const e of v) {
+          const onlyId = isObj(e) && Object.keys(e).length === 1 && has(e, "id");
+          requestId(`cells.${k}`, onlyId ? e.id : e);
+        }
+      } else if (!CELL_SCALARS.includes(k) || isObj(v) || Array.isArray(v)) {
+        throw new WriteRefusal(`cells.${k} is not a cell key the guard reads`);
+      }
+    }
+  }
+}
+
 // Every value at a dotted path, through arrays at any step.
 function valuesAt(value: unknown, path: readonly string[]): unknown[] {
   if (Array.isArray(value)) return value.flatMap((v) => valuesAt(v, path));
@@ -1071,6 +1121,7 @@ const hasMore = (x: unknown): boolean => isObj(x) && isObj(x.paging) && Boolean(
 export async function buildDescriptor(req: WriteRequest, ctx: BuildContext, get: GraphGet): Promise<Descriptor> {
   const params = req.params;
   assertReadable(params);
+  assertRequestValues(params);
   const pkeys = paramsKeys(params);
 
   // One GET, wrapped: a throw or an answer that is not an object is null. Repeated reads share one answer.
@@ -1227,16 +1278,23 @@ export async function buildDescriptor(req: WriteRequest, ctx: BuildContext, get:
       else if (object.type === "ad") id = await campaignOfAdset(params.adset_id);
       if (id) campaigns.push(await readCampaign(id, "parent"));
     } else if (role === "destination") {
+      // Every destination key the body sends is a destination, whatever the source's type (T4-2): Meta lands
+      // an ad copy by adset_id and an ad set copy by campaign_id, and the guard must see whichever decides.
+      const keyed: string[] = [];
+      if (has(params, "campaign_id")) keyed.push(requestId("campaign_id", params.campaign_id));
+      if (has(params, "adset_id")) {
+        const id = await campaignOfAdset(params.adset_id);
+        if (id === null) throw new WriteRefusal(`the campaign of adset_id ${String(params.adset_id)} can't be read`);
+        keyed.push(id);
+      }
       if (object.type === "campaign") {
         campaigns.push(createdCampaign("destination", actOf(facts?.account_id), false));
-      } else {
-        const id = has(params, "campaign_id")
-          ? idString(params.campaign_id)
-          : has(params, "adset_id")
-            ? await campaignOfAdset(params.adset_id)
-            : ownCampaign();
+      } else if (!has(params, object.type === "ad" ? "adset_id" : "campaign_id")) {
+        // The key that decides for this source type is absent: the copy lands in the source's own campaign.
+        const id = ownCampaign();
         if (id) campaigns.push(await readCampaign(id, "destination"));
       }
+      for (const id of new Set(keyed)) campaigns.push(await readCampaign(id, "destination"));
     } else {
       campaigns.push(...(await studyCampaigns()));
     }
@@ -1329,9 +1387,11 @@ export async function buildDescriptor(req: WriteRequest, ctx: BuildContext, get:
     owner_page: null,
     owner_ig: null,
   });
-  const resolve = async (field: IdentityField, via: IdentityVia, value: unknown): Promise<void> => {
-    const id = idString(value);
-    if (id === null) return;
+  // One identity value; false when it is not a readable id (a request's were refused up front, so only a value
+  // Graph reported reaches here unreadable, and its creative is then unresolved).
+  const resolve = async (field: IdentityField, via: IdentityVia, value: unknown): Promise<boolean> => {
+    const id = graphId(value);
+    if (id === null) return false;
     const ownerKey = OWNER_KEY[field];
     const how = RESOLVE[field];
     let owner: string | null = null;
@@ -1346,9 +1406,15 @@ export async function buildDescriptor(req: WriteRequest, ctx: BuildContext, get:
       owner_page: ownerKey === "owner_page" ? owner : null,
       owner_ig: ownerKey === "owner_ig" ? owner : null,
     });
+    return true;
   };
-  const fromRequest = async (source: unknown, fields: readonly IdentityField[], via: IdentityVia): Promise<void> => {
-    for (const field of fields) for (const v of valuesAt(source, field.split("."))) await resolve(field, via, v);
+  // Every identity value in a request or a creative as read; true when every one is a readable id.
+  const fromRequest = async (source: unknown, fields: readonly IdentityField[], via: IdentityVia): Promise<boolean> => {
+    let readable = true;
+    for (const field of fields) {
+      for (const v of valuesAt(source, field.split("."))) readable = (await resolve(field, via, v)) && readable;
+    }
+    return readable;
   };
   // A creative read by GET (contract §3.2 creative_id, source_ad): each identity field it holds is an entry; a
   // failed read, or a spec holding a key or path no key set admits, also makes the creative itself one.
@@ -1357,9 +1423,11 @@ export async function buildDescriptor(req: WriteRequest, ctx: BuildContext, get:
     if (cid === null) return;
     const spec = graphId(cid) === null ? null : await read(`/${cid}`, { fields: CREATIVE_READ_FIELDS });
     if (!spec) return add(unresolvedCreative(cid, via));
-    await fromRequest(spec, IDENTITY_FIELDS.creative, via);
-    for (const [key, field] of CREATIVE_READ_ALIASES) if (has(spec, key)) await resolve(field, via, spec[key]);
-    if (!admittedCreativeSpec(spec)) add(unresolvedCreative(cid, via));
+    let readable = await fromRequest(spec, IDENTITY_FIELDS.creative, via);
+    for (const [key, field] of CREATIVE_READ_ALIASES) {
+      if (has(spec, key)) readable = (await resolve(field, via, spec[key])) && readable;
+    }
+    if (!readable || !admittedCreativeSpec(spec)) add(unresolvedCreative(cid, via));
   };
 
   await fromRequest(params, IDENTITY_FIELDS.direct, "direct");

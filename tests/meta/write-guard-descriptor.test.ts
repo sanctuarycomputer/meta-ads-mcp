@@ -802,7 +802,7 @@ describe("skipped fixtures build their consistent form", () => {
   it("identity-key-no-entry: the instagram_user_id sent gets an entry, unresolved", async () => {
     const d = await run("identity-key-no-entry");
     expect(d.params_keys).toContain("instagram_user_id");
-    expect(d.identity).toContainEqual({ field: "instagram_user_id", via: "direct", id: "x", owner_page: null, owner_ig: null });
+    expect(d.identity).toContainEqual({ field: "instagram_user_id", via: "direct", id: "9998000000000999", owner_page: null, owner_ig: null });
     expect(d.identity).toHaveLength(2);
   });
 
@@ -848,4 +848,148 @@ describe("skipped fixtures build their consistent form", () => {
       expect(d.identity.every((e) => e.via === "direct")).toBe(true);
     },
   );
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Fix round 1 (review task-4): a request value present but unreadable refuses (T4-1, T4-3); every destination
+// key a copy sends is a destination (T4-2); guards with no deciding test (T4-5).
+describe("T4-1: an id present but not a readable id refuses", () => {
+  const big = 2 ** 60; // past 2^53: not a safe integer
+  const cases: Array<[string, WriteRequest, string]> = [
+    ["an attached creative_id past 2^53", post(`/${ACT}/ads`, { adset_id: ADSET, creative: { creative_id: big } }), "creative.creative_id is not an id"],
+    ["an attached creative_id in an array", post(`/${AD}`, { creative: { creative_id: [CREATIVE] } }), "creative.creative_id is not an id"],
+    ["a top-level creative_id true", post(`/${AD}`, { creative_id: true }), "creative_id is not an id"],
+    ["a top-level creative_id empty", post(`/${AD}`, { creative_id: "" }), "creative_id is not an id"],
+    ["one unreadable value of a multi-valued field", post(`/${ACT}/adcreatives`, { object_id: [PAGE, 1.5] }), "object_id is not an id"],
+    ["an object where a Page id goes", post(`/${ACT}/adcreatives`, { object_story_spec: { page_id: { id: PAGE } } }), "object_story_spec.page_id is not an id"],
+    ["an inline creative's Instagram id null", post(`/${ACT}/ads`, { adset_id: ADSET, creative: { instagram_user_id: null } }), "creative.instagram_user_id is not an id"],
+    ["a pixel id false", post(`/${ACT}/customconversions`, { pixel_id: false }), "pixel_id is not an id"],
+    ["a study objective's pixel not digits", post(`/${BUSINESS}/ad_studies`, { objectives: [{ adspixels: [{ id: "abc" }] }] }), "objectives.adspixels.id is not an id"],
+    ["a parent campaign_id not an id", post(`/${ACT}/adsets`, { campaign_id: "x" }), "campaign_id is not an id"],
+    ["a parent adset_id fractional", post(`/${ACT}/ads`, { adset_id: 1.5 }), "adset_id is not an id"],
+    ["a copy destination campaign_id empty", post(`/${ADSET}/copies`, { campaign_id: "" }), "campaign_id is not an id"],
+    ["a study cell campaign id not digits", post(`/${BUSINESS}/ad_studies`, { cells: [{ campaigns: ["x"] }] }), "cells.campaigns is not an id"],
+    ["a study cell ad set id past 2^53", post(`/${BUSINESS}/ad_studies`, { cells: [{ adsets: [big] }] }), "cells.adsets is not an id"],
+  ];
+  it.each(cases)("%s", async (_label, req, detail) => {
+    const calls: Call[] = [];
+    const ctx = { tool: "ads_test_tool", validateOnly: false, requestId: "r", accounts: new Set<string>() };
+    const err = await buildDescriptor(req, ctx, fakeGet(new Map(Object.entries(world())), calls)).catch((e: Error) => e);
+    expect((err as Error).message).toBe(refused(detail));
+    // Refused before any read.
+    expect(calls).toEqual([]);
+  });
+
+  it("an identity value Graph reports unreadable makes its creative unresolved", async () => {
+    const w = world({ [`/${CREATIVE}`]: { object_story_spec: { page_id: 1.5 }, instagram_actor_id: IG } });
+    const { d } = await build(post(`/${ACT}/ads`, { adset_id: ADSET, creative: { creative_id: CREATIVE } }), w);
+    expect(d.identity).toEqual(
+      expect.arrayContaining([
+        { field: "creative_id", via: "creative_id", id: CREATIVE, owner_page: null, owner_ig: null },
+        { field: "instagram_actor_id", via: "creative_id", id: IG, owner_page: null, owner_ig: IG },
+      ]),
+    );
+    expect(d.identity).toHaveLength(2);
+  });
+
+  it("an unreadable actor_id in a creative as read makes it unresolved too", async () => {
+    const w = world({ [`/${CREATIVE}`]: { actor_id: [PAGE] } });
+    const { d } = await build(post(`/${AD}/copies`, { adset_id: ADSET }), w);
+    expect(d.identity).toEqual([{ field: "creative_id", via: "source_ad", id: CREATIVE, owner_page: null, owner_ig: null }]);
+  });
+});
+
+describe("T4-2: every destination key a copy sends is a destination", () => {
+  const dest = (d: Descriptor) => d.campaigns.filter((c) => c.role === "destination").map((c) => c.id);
+
+  it("an ad copy with adset_id and campaign_id lists both campaigns", async () => {
+    const { d } = await build(post(`/${AD}/copies`, { adset_id: ADSET2, campaign_id: CAMP, status_option: "ACTIVE" }), world());
+    expect(dest(d)).toEqual([CAMP, CAMP2]);
+  });
+
+  it("an ad set copy with only adset_id lists that ad set's campaign and its own, where it lands", async () => {
+    const { d } = await build(post(`/${ADSET2}/copies`, { adset_id: ADSET }), world({ [`/${ADSET2}/ads`]: { data: [] } }));
+    expect(dest(d)).toEqual([CAMP2, CAMP]);
+  });
+
+  it("an ad copy with only campaign_id lists that campaign and its own", async () => {
+    const { d } = await build(post(`/${AD}/copies`, { campaign_id: CAMP2 }), world());
+    expect(dest(d)).toEqual([CAMP, CAMP2]);
+  });
+
+  it("an ad set copy by campaign_id and an ad copy by adset_id list only the deciding key's", async () => {
+    expect(dest((await build(post(`/${ADSET}/copies`, { campaign_id: CAMP2 }), world({ [`/${ADSET}/ads`]: { data: [] } }))).d)).toEqual([CAMP2]);
+    expect(dest((await build(post(`/${AD}/copies`, { adset_id: ADSET2 }), world())).d)).toEqual([CAMP2]);
+  });
+
+  it("a campaign copy sending campaign_id lists it beside the campaign it creates", async () => {
+    const { d } = await build(post(`/${CAMP}/copies`, { campaign_id: CAMP2 }), world({ [`/${CAMP}/ads`]: { data: [] } }));
+    expect(d.campaigns.map((c) => [c.id, c.created])).toEqual([
+      [null, true],
+      [CAMP2, false],
+    ]);
+  });
+
+  it("an adset_id whose campaign can't be read refuses", async () => {
+    await expect(build(post(`/${AD}/copies`, { adset_id: ADSET2 }), world({ [`/${ADSET2}`]: new Error("down") }))).rejects.toThrow(
+      refused(`the campaign of adset_id ${ADSET2} can't be read`),
+    );
+  });
+});
+
+describe("T4-3: a study cell or other read value of the wrong shape refuses", () => {
+  const cases: Array<[string, WriteRequest, string]> = [
+    ["a cell's campaigns not an array", post(`/${BUSINESS}/ad_studies`, { cells: [{ campaigns: [CAMP] }, { campaigns: CAMP2 }] }), "cells.campaigns is not a list of ids"],
+    ["a cell's adsets not an array", post(`/${BUSINESS}/ad_studies`, { cells: [{ campaigns: [CAMP] }, { adsets: ADSET2 }] }), "cells.adsets is not a list of ids"],
+    ["a cell key the builder doesn't read", post(`/${BUSINESS}/ad_studies`, { cells: [{ campaigns: [CAMP], adaccounts: [ACT] }] }), "cells.adaccounts is not a cell key the guard reads"],
+    ["a cell scalar key holding an object", post(`/${BUSINESS}/ad_studies`, { cells: [{ campaigns: [CAMP], name: { campaigns: [CAMP2] } }] }), "cells.name is not a cell key the guard reads"],
+    ["a cell campaign object with more than its id", post(`/${BUSINESS}/ad_studies`, { cells: [{ campaigns: [{ id: CAMP, x: 1 }] }] }), "cells.campaigns is not an id"],
+    ["a status that is not a status", post(`/${ADSET}`, { status: "LIVE" }), "status is not a status"],
+    ["a status_option that is not one", post(`/${AD}/copies`, { status_option: "LIVE" }), "status_option is not a status option"],
+    ["an end_time object", post(`/${ADSET}`, { end_time: {} }), "end_time is not a time"],
+    ["a stop_time true", post(`/${CAMP}`, { stop_time: true }), "stop_time is not a time"],
+  ];
+  it.each(cases)("%s", async (_label, req, detail) => {
+    await expect(build(req, world())).rejects.toThrow(refused(detail));
+  });
+
+  it("a cell's campaigns as id objects, and its scalar keys, are read", async () => {
+    const cells = [{ id: "1", name: "a", treatment_percentage: 50, campaigns: [{ id: CAMP }] }, { adsets: [ADSET2] }];
+    const { d } = await build(post(`/${BUSINESS}/ad_studies`, { cells }), world());
+    expect(d.campaigns.map((c) => c.id)).toEqual([CAMP, CAMP2]);
+  });
+});
+
+describe("T4-5: guards with a deciding test", () => {
+  const nullCell = { id: null, account_id: null, created: false, role: "study-cell", spend_cap_minor_before: null, spend_cap_minor_after: null, name: null, status_after: null, buying_type: null };
+  const studyWorld = (cells: unknown) =>
+    world({ [`/${STUDY}`]: { metadata: { type: "adstudy" }, business: { id: BUSINESS } }, [`/${STUDY}/cells`]: { data: cells } });
+
+  it("GRAPH_ID: an id Graph reports that is not Graph-shaped is never put in a GET path", async () => {
+    const odd = `${CAMP}/../${CAMP2}`;
+    const { d, calls } = await build(post(`/${ADSET}`, { name: "n" }), world({ [`/${ADSET}`]: { metadata: { type: "adset" }, account_id: ACT_DIGITS, campaign_id: odd } }));
+    expect(calls.some((c) => c.path.includes(".."))).toBe(false);
+    expect(d.campaigns).toEqual([{ ...nullCell, id: odd, role: "parent" }]);
+  });
+
+  it("a listed cell whose adsets edge Meta cut short adds the null entry", async () => {
+    const { d } = await build(post(`/${STUDY}`, { name: "n" }), studyWorld([{ adsets: { data: [{ campaign_id: CAMP }], paging: { next: "n" } } }]));
+    expect(d.campaigns).toContainEqual(nullCell);
+  });
+
+  it("a listed cell ad set with no campaign_id adds the null entry", async () => {
+    const { d } = await build(post(`/${STUDY}`, { name: "n" }), studyWorld([{ campaigns: { data: [{ id: CAMP }] } }, { adsets: { data: [{}] } }]));
+    expect(d.campaigns).toContainEqual(nullCell);
+    expect(d.campaigns).toHaveLength(2);
+  });
+
+  it("identity entries are de-duplicated by field, via and id", async () => {
+    const { d } = await build(post(`/${ACT}/adcreatives`, { object_id: [PAGE, PAGE] }), world());
+    expect(d.identity).toEqual([{ field: "object_id", via: "direct", id: PAGE, owner_page: PAGE, owner_ig: null }]);
+  });
+
+  it("study-cell campaigns are de-duplicated by id", async () => {
+    const { d } = await build(post(`/${BUSINESS}/ad_studies`, { cells: [{ campaigns: [CAMP] }, { campaigns: [CAMP] }] }), world());
+    expect(d.campaigns.map((c) => c.id)).toEqual([CAMP]);
+  });
 });
