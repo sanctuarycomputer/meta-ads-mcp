@@ -59,6 +59,8 @@ describe("guardEnv", () => {
         META_API_VERSION: "v99.0",
         META_ADS_TOOLSETS: "campaigns:write",
         META_ADS_READ_ONLY: "1",
+        // A META_* key no list names: the allowlist, not a denylist, keeps it out.
+        META_SOME_FUTURE_KEY: "future",
         OTHER: "o",
         XNODE_Y: "n",
       }),
@@ -89,6 +91,7 @@ describe("GuardRunner.decide", () => {
       META_API_VERSION: "v99.0",
       META_ADS_TOOLSETS: "campaigns:write",
       META_ADS_READ_ONLY: "1",
+      META_SOME_FUTURE_KEY: "future",
       OTHER: "other",
     };
     const r = await new GuardRunner({ env, cwd: ROOT }).decide(DESCRIPTOR);
