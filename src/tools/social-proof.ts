@@ -136,19 +136,23 @@ export function registerSocialProofTools(server: McpServer, deps: { maxScannedAd
   server.registerTool(
     "ads_duplicate_ad",
     {
-      description: `${WRITE_WARNING}Copy an ad into one or more ad sets of its account, keeping its likes, comments and shares. By default every copy uses the source ad's own creative, so it shows the same Facebook post and the same Instagram media, and every text option comes along (measured on v26.0). Each copy also carries the source's tracking specs, conversion domain and ad labels. With keep_social_proof: false, Meta's own ad copy gives each copy a creative and post of its own, starting from zero. Copies are created PAUSED unless status says otherwise. A real run needs an idempotency_key: the same key and payload return the first run's result instead of creating again, and a key whose run did not finish is never run again. Creating copies needs the server's Firestore store, which keeps that record across restarts; without it only dry_run works. When Meta's answer to a create is lost, the ad set is reported unconfirmed, with any ad that may be the copy as a candidate: list that ad set's ads before running again. To read the social proof itself, use ads_get_ad_social_proof.`,
+      description: `${WRITE_WARNING}Copy an ad into one or more ad sets of its account, keeping its likes, comments and shares. By default every copy uses the source ad's own creative, so it shows the same Facebook post and the same Instagram media, and every text option comes along (measured on v26.0). Each copy also carries the source's tracking specs, conversion domain and ad labels. With keep_social_proof: false, Meta's own ad copy gives each copy a creative and post of its own, starting from zero. Copies are always created PAUSED; turn one on with ads_update_ad status ACTIVE, which the spend guard checks. A real run needs an idempotency_key: the same key and payload return the first run's result instead of creating again, and a key whose run did not finish is never run again. Creating copies needs the server's Firestore store, which keeps that record across restarts; without it only dry_run works. When Meta's answer to a create is lost, the ad set is reported unconfirmed, with any ad that may be the copy as a candidate: list that ad set's ads before running again. To read the social proof itself, use ads_get_ad_social_proof.`,
       inputSchema: {
         ad_id: z.string().describe("The ad to copy"),
         ad_set_ids: z.array(z.string()).min(1).max(20).describe("Ad sets of the source ad's account to put one copy in each"),
         name: z.string().min(1).max(400).optional().describe("Name of every copy. Defaults to the source ad's name"),
-        status: z.enum(["PAUSED", "ACTIVE"]).default("PAUSED").describe("Status of the copies. ACTIVE spends as soon as the ad set runs"),
         keep_social_proof: z.boolean().default(true).describe("true: copies share the source's post and Instagram media. false: Meta copies the ad with a new post, which starts from zero"),
         dry_run: z.boolean().default(false).describe("Read and check everything without creating anything"),
         idempotency_key: z.string().min(1).max(200).optional().describe("Required unless dry_run. Running again with the same key and payload returns the first result instead of creating copies again"),
       },
       annotations: { ...CREATE },
     },
-    async ({ ad_id, ad_set_ids, name, status = "PAUSED", keep_social_proof = true, dry_run = false, idempotency_key }) => {
+    async ({ ad_id, ad_set_ids, name, keep_social_proof = true, dry_run = false, idempotency_key }) => {
+      // Every copy is created PAUSED, whatever the caller passed: turning one
+      // on is a separate update, which the spend guard checks. The value
+      // stays in the run's signature, so a key stored before this kept
+      // matching for the default payload.
+      const status = "PAUSED";
       // Malformed input is named by its position and never repeated, so it
       // cannot reach the reply as framing.
       if (!NUMERIC_ID.test(ad_id)) throw new Error("ad_id is not an ad ID: ad IDs are numeric.");
@@ -271,14 +275,14 @@ export function registerSocialProofTools(server: McpServer, deps: { maxScannedAd
                 name: name ?? source.name ?? `Copy of ${adId}`,
                 adset_id: adSetId,
                 creative: JSON.stringify({ creative_id: creativeId }),
-                status,
+                status: "PAUSED",
                 ...optionalFields,
               });
               answered = result.id;
             } else {
               const result = await metaApiClient.postForm<{ copied_ad_id?: unknown; id?: unknown }>(`/${adId}/copies`, {
                 adset_id: adSetId,
-                status_option: status,
+                status_option: "PAUSED",
                 rename_options: JSON.stringify({ rename_strategy: "NO_RENAME" }),
               }, { accountId: accountPath });
               answered = result.copied_ad_id ?? result.id;
@@ -366,7 +370,6 @@ export function registerSocialProofTools(server: McpServer, deps: { maxScannedAd
       if (!recordSaved) {
         lines.push(`The record of this run could not be saved, so it stopped${notAttempted.length > 0 ? ` before ad sets ${notAttempted.join(", ")}` : ""}. This idempotency_key cannot be used again: run what is left with a new one.`);
       }
-      if (status === "ACTIVE" && created.length > 0) lines.push("The copies are ACTIVE: they spend as soon as their ad sets run.");
       return reply(lines, notes, report);
     },
   );
