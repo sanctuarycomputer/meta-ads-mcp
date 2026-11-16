@@ -348,7 +348,7 @@ describe("read tools send only GET or POST /act_<n>/insights (check 2.2, runtime
   let requests: string[] = [];
   let populated = false;
   let served = 0;
-  const pagedTools = new Set<string>();
+  let cursorFollowed = false;
 
   beforeEach(() => {
     setupTestToken();
@@ -359,6 +359,7 @@ describe("read tools send only GET or POST /act_<n>/insights (check 2.2, runtime
       const path = u.pathname.replace(/^\/v[\d.]+/, "");
       const override = overrideKey(u.searchParams.keys()) || overrideKey(bodyKeys(init?.body));
       requests.push(override ? `OVERRIDE ${method} ${path}` : `${method} ${path}`);
+      if (u.searchParams.get("after") === "c1") cursorFollowed = true;
       served++;
       const body = populated
         ? { id: "100000000", success: true, data: [{ id: "100000000", name: "n" }],
@@ -380,7 +381,6 @@ describe("read tools send only GET or POST /act_<n>/insights (check 2.2, runtime
     expect(obj.safeParse(starters[0].args).success, "required arguments must pass the schema").toBe(true);
     expect(obj.safeParse(starters[1].args).success, "all-field arguments must pass the schema").toBe(true);
 
-    let pagesFollowed = false;
     const run = async (set: ArgSet, stub: boolean): Promise<string[]> => {
       const parsed = obj.safeParse(freshen(set.args));
       expect(parsed.success, `${tool.name} [${set.label}] arguments must pass the schema`).toBe(true);
@@ -388,13 +388,13 @@ describe("read tools send only GET or POST /act_<n>/insights (check 2.2, runtime
       populated = stub;
       served = 0;
       requests = [];
+      cursorFollowed = false;
       try {
         await tool.handler(parsed.data, {});
       } catch {
         // A refusal is fine; what was sent before it is checked below.
       }
       for (const r of requests) expect(r, `${tool.name} [${set.label}, ${stub ? "populated" : "empty"}]`).toMatch(ALLOWED_REQUEST);
-      if (stub && served > 1) pagesFollowed = true;
       return requests;
     };
 
@@ -420,51 +420,116 @@ describe("read tools send only GET or POST /act_<n>/insights (check 2.2, runtime
       // may stop before calling Meta; then another starting set must reach it.
       expect(live.length, `${tool.name} made no request under any starting set`).toBeGreaterThan(0);
     }
-    if (pagesFollowed) pagedTools.add(tool.name);
   }, 60_000);
 
-  it("the populated answer's next page is followed by the list tools", () => {
-    // Runs after the probes above (tests in a file run in order): the paging stub is exercised.
-    expect(pagedTools.size).toBeGreaterThan(5);
-  });
+  it.each(["ads_get_ad_account_pages", "ads_get_user_pages", "ads_get_ad_studies"])(
+    "%s follows the populated answer's cursor to a second page, so later pages are probed too",
+    async (name) => {
+      const tool = allowedReadTools().find((t) => t.name === name);
+      expect(tool).toBeDefined();
+      const shape = (tool?.schema ?? {}) as Record<string, z.ZodType>;
+      const args = z.object(shape).parse(freshen(starterSets(shape)[0].args));
+      populated = true;
+      served = 0;
+      requests = [];
+      cursorFollowed = false;
+      await tool?.handler(args, {});
+      expect(cursorFollowed, `${name} requests: ${requests.join(", ")}`).toBe(true);
+    },
+  );
 });
 
 // ─── 2.2, static: read tools' blocks call no client write method or write helper ───
 
-const WRITE_CALL = /metaApiClient\s*\.\s*(post|postForm|postMultipart|delete|execute)\b/;
-const ALIAS = /(?:[=(,:]\s*metaApiClient\s*[;),\]}]|metaApiClient\s*\[|\}\s*=\s*metaApiClient\b(?!\s*\.)|=\s*metaApiClient\s*$)/m;
+const WRITE_CALL = /metaApiClient\s*\??\.\s*(post|postForm|postMultipart|delete|execute)\b/;
+
+/** Every use of metaApiClient other than its import must be a member access, so no alias can carry it out of sight. */
+function aliases(text: string): string[] {
+  const body = text.replace(/^import[^;]*;/gm, "");
+  const out: string[] = [];
+  for (const m of body.matchAll(/\bmetaApiClient\b/g)) {
+    if (!/^\s*\??\.\s*\w/.test(body.slice(m.index + m[0].length))) out.push(body.slice(Math.max(0, m.index - 30), m.index + 40));
+  }
+  return out;
+}
 
 function exportedFunctions(rel: string): string[] {
   return [...source(rel).matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1]);
 }
 const WRITE_HELPERS = [...exportedFunctions("meta/post-edit.ts"), ...exportedFunctions("meta/creative-rebuild.ts")];
 
-/** A line that starts a top-level declaration; a registration block ends at the next one. */
-const TOP_LEVEL = /^(?:export\s|async\s|function\s|const\s|let\s|var\s|class\s|interface\s|type\s|enum\s)/m;
+/**
+ * Index just past the bracket that closes the one at `open`, skipping strings,
+ * template literals (their ${...} parts are scanned as code) and comments.
+ */
+function matchClose(text: string, open: number): number {
+  const closer: Record<string, string> = { "(": ")", "{": "}", "[": "]" };
+  const stack: string[] = [];
+  for (let i = open; i < text.length; i++) {
+    const c = text[i];
+    const top = stack[stack.length - 1];
+    if (top === "`") {
+      if (c === "\\") i++;
+      else if (c === "`") stack.pop();
+      else if (c === "$" && text[i + 1] === "{") { stack.push("}"); i++; }
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "/") { i = text.indexOf("\n", i); if (i === -1) return text.length; continue; }
+    if (c === "/" && text[i + 1] === "*") { i = text.indexOf("*/", i + 2) + 1; if (i === 0) return text.length; continue; }
+    if (c === "'" || c === '"') {
+      for (i++; i < text.length && text[i] !== c; i++) if (text[i] === "\\") i++;
+      continue;
+    }
+    if (c === "`") { stack.push("`"); continue; }
+    if (c in closer) stack.push(closer[c]);
+    else if (c === ")" || c === "}" || c === "]") {
+      if (stack.pop() !== c) return text.length;
+      if (stack.length === 0) return i + 1;
+    }
+  }
+  return text.length;
+}
 
-/** Functions defined anywhere in a file (declarations, arrow or function expressions), name -> text up to the next definition or registration. */
+/** The text of a function from its definition at `at` to the end of its body (braced or expression). */
+function functionBody(text: string, at: number): string {
+  const head = /=>\s*|\)\s*(?::[^{=]+)?\{|\{/g;
+  head.lastIndex = at;
+  const m = head.exec(text);
+  if (!m) return text.slice(at);
+  if (m[0].startsWith("=>") && text[m.index + m[0].length] !== "{") {
+    // expression body: to the end of the statement
+    let i = m.index + m[0].length;
+    for (; i < text.length && text[i] !== ";" && text[i] !== "\n"; i++) {
+      if ("({[".includes(text[i])) i = matchClose(text, i) - 1;
+    }
+    return text.slice(at, i);
+  }
+  const brace = text.indexOf("{", m.index + (m[0].startsWith("=>") ? 2 : 0));
+  return text.slice(at, matchClose(text, brace));
+}
+
+const KEYWORDS = new Set(["if", "for", "while", "switch", "catch", "function", "return", "await", "typeof", "new"]);
+
+/** Functions defined anywhere in a file: declarations, arrow and function expressions, object methods. */
 function fileFunctions(text: string): Map<string, string> {
   const out = new Map<string, string>();
-  const defs = [...text.matchAll(/\bfunction\s+(\w+)\s*[<(]|\b(?:const|let|var)\s+(\w+)\s*(?::[^=]+)?=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*(?::[^=]+)?=>|\w+\s*=>)/g)];
-  for (let i = 0; i < defs.length; i++) {
-    const name = defs[i][1] ?? defs[i][2];
-    if (/^register\w*Tools$/.test(name)) continue;
-    const nextDef = i + 1 < defs.length ? defs[i + 1].index : text.length;
-    const nextBlock = text.indexOf("registerTool(", defs[i].index);
-    const end = nextBlock === -1 ? nextDef : Math.min(nextDef, nextBlock);
-    out.set(name, text.slice(defs[i].index, end));
+  const defs = /\bfunction\s+(\w+)\s*[<(]|\b(?:const|let|var)\s+(\w+)\s*(?::[^=]+)?=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*(?::[^=]+)?=>|\w+\s*=>)|^[ \t]*(?:async\s+)?(\w+)\s*\([^)]*\)\s*(?::[^{]+)?\{/gm;
+  for (const m of text.matchAll(defs)) {
+    const name = m[1] ?? m[2] ?? m[3];
+    if (KEYWORDS.has(name) || /^register\w*Tools$/.test(name)) continue;
+    out.set(name, (out.get(name) ?? "") + functionBody(text, m.index));
   }
   return out;
 }
 
-/** Each tool's registration block in a file, by tool name. */
+/** Each tool's registration call in a file, by tool name: the whole registerTool(...) argument list. */
 function blocks(text: string): Map<string, string> {
   const out = new Map<string, string>();
-  for (const part of text.split(/\bregisterTool\(/).slice(1)) {
-    const name = /^\s*["'`](\w+)["'`]/.exec(part)?.[1];
-    if (!name) continue;
-    const m = TOP_LEVEL.exec(part);
-    out.set(name, m ? part.slice(0, m.index) : part);
+  for (const m of text.matchAll(/\bregisterTool\(/g)) {
+    const open = m.index + m[0].length - 1;
+    const call = text.slice(open, matchClose(text, open));
+    const name = /^\(\s*["'`](\w+)["'`]/.exec(call)?.[1];
+    if (name) out.set(name, call);
   }
   return out;
 }
@@ -475,7 +540,7 @@ describe("read tools' blocks call no client write method or write helper (check 
 
   it.each(ALLOWED_GROUPS)("%s", (stem) => {
     const text = source(`tools/${stem}.ts`);
-    expect(text, `${stem}: metaApiClient is aliased, so the static check can't follow it`).not.toMatch(ALIAS);
+    expect(aliases(text), `${stem}: metaApiClient used other than by member access, so the static check can't follow it`).toEqual([]);
     const byName = blocks(text);
     const functions = fileFunctions(text);
     for (const name of readByGroup.get(stem) ?? []) {
@@ -483,12 +548,32 @@ describe("read tools' blocks call no client write method or write helper (check 
       expect(block, `${name}: no registration block found in tools/${stem}.ts`).toBeDefined();
       if (!block) continue;
       expect(block, `${name}: client write call in a read block`).not.toMatch(WRITE_CALL);
-      for (const h of WRITE_HELPERS) expect(new RegExp(`\\b${h}\\s*\\(`).test(block), `${name} calls write helper ${h}`).toBe(false);
+      for (const h of WRITE_HELPERS) expect(new RegExp(`\\b${h}\\b`).test(block), `${name} uses write helper ${h}`).toBe(false);
+      // Any function of this file the block names (called or passed by reference), one level deep.
       for (const [f, body] of functions) {
-        if (!new RegExp(`\\b${f}\\s*\\(`).test(block)) continue;
-        expect(body, `${name} calls ${f}, which makes a client write call`).not.toMatch(WRITE_CALL);
-        for (const h of WRITE_HELPERS) expect(new RegExp(`\\b${h}\\s*\\(`).test(body), `${name} calls ${f}, which calls write helper ${h}`).toBe(false);
+        if (!new RegExp(`\\b${f}\\b`).test(block)) continue;
+        expect(body, `${name} uses ${f}, which makes a client write call`).not.toMatch(WRITE_CALL);
+        for (const h of WRITE_HELPERS) expect(new RegExp(`\\b${h}\\b`).test(body), `${name} uses ${f}, which uses write helper ${h}`).toBe(false);
       }
     }
+  });
+});
+
+describe("the static check's scanner", () => {
+  it("reads a helper to its closing brace, past nested functions and template literals", () => {
+    const text = "function h() {\n  const f = () => 1;\n  const t = `\n}\nconst x = ${'{'}`;\n  metaApiClient.postForm('/x', {});\n}\nfunction next() {}\n";
+    expect(fileFunctions(text).get("h")).toMatch(WRITE_CALL);
+    expect(fileFunctions(text).get("next")).not.toMatch(WRITE_CALL);
+  });
+
+  it("reads a registration to its closing parenthesis, past column-0 lines inside a template literal", () => {
+    const text = "server.registerTool(\n  \"t\",\n  { description: `a\nconst b\n}` },\n  async () => { await metaApiClient.postForm('/x', {}); },\n);\nconst after = 1;\n";
+    expect(blocks(text).get("t")).toMatch(WRITE_CALL);
+  });
+
+  it("finds an alias however it is written", () => {
+    expect(aliases("const api = metaApiClient as typeof metaApiClient;")).not.toEqual([]);
+    expect(aliases("use(metaApiClient);")).not.toEqual([]);
+    expect(aliases("import { metaApiClient } from \"x\";\nmetaApiClient.get('/a');\nmetaApiClient?.get('/b');")).toEqual([]);
   });
 });
