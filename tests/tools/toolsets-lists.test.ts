@@ -527,53 +527,103 @@ function blocks(sf: ts.SourceFile): Map<string, ts.Node> {
   return out;
 }
 
+/** Strip parentheses, casts, `satisfies` and `!` around an expression. */
+function bare(e: ts.Expression): ts.Expression {
+  let cur = e;
+  while (ts.isParenthesizedExpression(cur) || ts.isAsExpression(cur) || ts.isTypeAssertionExpression(cur)
+    || ts.isSatisfiesExpression(cur) || ts.isNonNullExpression(cur)) cur = cur.expression;
+  return cur;
+}
+
+const isFunctionValue = (e: ts.Expression | undefined): boolean => !!e && (ts.isArrowFunction(bare(e)) || ts.isFunctionExpression(bare(e)));
+
 /**
  * Writes in the node and in everything in the same file it names, followed
- * transitively by symbol: the declaration of each name (a function, class,
- * method, accessor, variable or property, whatever its value; for a name bound
- * by destructuring, the whole declaration), the value a shorthand property
- * stands for, and every assignment to it or to a property of it (`=`, `??=`
- * and the other assignment operators).
+ * transitively two ways at once:
+ * - by symbol (the type checker, so by scope): each name's declaration (for a
+ *   destructured name, the whole declaration; for a for...of or for...in
+ *   binding, the iterated expression), the value a shorthand property stands
+ *   for, and every assignment to it, including destructuring assignments and
+ *   `??=` and the other assignment operators;
+ * - by spelling, for a name the checker can't tie to a value declared in this
+ *   file (unresolved, as on an `any` holder, or only a type member): every
+ *   function-valued declaration, property or method of that name anywhere in the
+ *   file (so a function stored by Object.assign, or in an
+ *   object literal, is found whatever holds it), and every function stored
+ *   under that name where the checker can't resolve it (`(box as any).h = fn`).
+ * A read block that names a holder is not charged with every assignment into it,
+ * only with what is stored under the names it uses.
  */
 function reachableWrites(start: ts.Node, { sf, checker }: Analysed): string[] {
-  const assigned = new Map<ts.Symbol, ts.Node[]>();
-  const assign = (target: ts.Node, n: ts.Node) => {
-    const sym = checker.getSymbolAtLocation(target);
-    if (sym) assigned.set(sym, [...(assigned.get(sym) ?? []), n]);
+  const bySymbol = new Map<ts.Symbol, ts.Node[]>();
+  const bySpelling = new Map<string, ts.Node[]>();
+  const file = <K>(map: Map<K, ts.Node[]>, key: K | undefined, n: ts.Node) => {
+    if (key !== undefined) map.set(key, [...(map.get(key) ?? []), n]);
   };
+  const nameOf = (name: ts.Node | undefined) => (name && (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isPrivateIdentifier(name)) ? name.text : undefined);
+
   walk(sf, (n) => {
-    const op = ts.isBinaryExpression(n) ? n.operatorToken.kind : undefined;
-    if (!ts.isBinaryExpression(n) || op === undefined || op < ts.SyntaxKind.FirstAssignment || op > ts.SyntaxKind.LastAssignment) return;
-    // `x = …`, `x ??= …`, and `holder.x = …` / `holder[k] = …` (also filed under the holder,
-    // whose type may be too loose for the property to resolve).
-    assign(n.left, n);
-    let root: ts.Expression = n.left;
-    while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root) || ts.isParenthesizedExpression(root)) root = root.expression;
-    if (root !== n.left) assign(root, n);
+    // Function-valued things, by spelling.
+    if (ts.isFunctionDeclaration(n) || ts.isMethodDeclaration(n) || ts.isGetAccessorDeclaration(n) || ts.isSetAccessorDeclaration(n)) {
+      file(bySpelling, nameOf(n.name), n);
+    } else if ((ts.isVariableDeclaration(n) || ts.isPropertyAssignment(n) || ts.isPropertyDeclaration(n)) && isFunctionValue(n.initializer)) {
+      file(bySpelling, nameOf(n.name), n);
+    }
+    // Assignments.
+    if (!ts.isBinaryExpression(n)) return;
+    const op = n.operatorToken.kind;
+    if (op < ts.SyntaxKind.FirstAssignment || op > ts.SyntaxKind.LastAssignment) return;
+    const left = bare(n.left);
+    if (ts.isObjectLiteralExpression(left) || ts.isArrayLiteralExpression(left)) {
+      // `({ a, b: c } = …)`, `[a] = …`: filed under every name bound on the left.
+      walk(left, (m) => {
+        if (ts.isShorthandPropertyAssignment(m)) file(bySymbol, checker.getShorthandAssignmentValueSymbol(m), n);
+        else if (ts.isIdentifier(m) && !(ts.isPropertyAssignment(m.parent) && m.parent.name === m)) file(bySymbol, checker.getSymbolAtLocation(m), n);
+      });
+      return;
+    }
+    const sym = checker.getSymbolAtLocation(left);
+    if (sym) file(bySymbol, sym, n);
+    // `(box as any).h = fn`: a function stored under a name the checker can't resolve; its value is read.
+    else if (ts.isPropertyAccessExpression(left) && isFunctionValue(n.right)) file(bySpelling, left.name.text, n.right);
   });
-  /** A binding inside a destructuring pattern is followed as its whole declaration, so the destructured value is read. */
-  const enclosing = (d: ts.Node): ts.Node => {
+
+  /** What to read for a declaration: the whole declaration around a binding pattern, and a loop binding's iterable. */
+  const declared = (d: ts.Node): ts.Node[] => {
     let cur = d;
     while (ts.isBindingElement(cur) || ts.isObjectBindingPattern(cur) || ts.isArrayBindingPattern(cur)) cur = cur.parent;
-    return cur;
+    const loop = ts.isVariableDeclaration(cur) && ts.isVariableDeclarationList(cur.parent) ? cur.parent.parent : undefined;
+    return loop && (ts.isForOfStatement(loop) || ts.isForInStatement(loop)) ? [cur, loop.expression] : [cur];
   };
+
   const out: string[] = [];
-  const seen = new Set<ts.Symbol>();
+  const seenSymbols = new Set<ts.Symbol>();
+  const seenSpellings = new Set<string>();
   const queue: Array<[string, ts.Node]> = [["(block)", start]];
+  const enqueue = (label: string, d: ts.Node, from: ts.Node) => {
+    if (d.getSourceFile() === sf && !(d.pos >= from.pos && d.end <= from.end)) queue.push([label, d]);
+  };
   while (queue.length > 0) {
     const [label, node] = queue.shift() as [string, ts.Node];
     for (const w of writesIn(node)) out.push(`${label}: ${w}`);
     walk(node, (n) => {
       if (!ts.isIdentifier(n) && !ts.isPrivateIdentifier(n)) return;
       const syms = [checker.getSymbolAtLocation(n)];
-      // `{ sneak }`: the property's symbol, and the value it is short for.
       if (ts.isShorthandPropertyAssignment(n.parent) && n.parent.name === n) syms.push(checker.getShorthandAssignmentValueSymbol(n.parent));
       for (const sym of syms) {
-        if (!sym || seen.has(sym)) continue;
-        seen.add(sym);
-        for (const d of [...(sym.declarations ?? []).map(enclosing), ...(assigned.get(sym) ?? [])]) {
-          if (d.getSourceFile() === sf && !(d.pos >= node.pos && d.end <= node.end)) queue.push([sym.name, d]);
-        }
+        if (!sym || seenSymbols.has(sym)) continue;
+        seenSymbols.add(sym);
+        for (const d of (sym.declarations ?? []).flatMap(declared)) enqueue(sym.name, d, node);
+        for (const d of bySymbol.get(sym) ?? []) enqueue(sym.name, d, node);
+      }
+      // Spelling stands in only where the checker can't tie the name to a value in this
+      // file (unresolved, as on an `any` holder, or only a type member), so a local of the
+      // same spelling as an unrelated function elsewhere doesn't pull that function in.
+      const vd = syms[0]?.valueDeclaration;
+      const unresolved = !vd || vd.getSourceFile() !== sf || ts.isPropertySignature(vd) || ts.isMethodSignature(vd);
+      if (unresolved && !seenSpellings.has(n.text)) {
+        seenSpellings.add(n.text);
+        for (const d of bySpelling.get(n.text) ?? []) enqueue(n.text, d, node);
       }
     });
   }
@@ -629,9 +679,32 @@ describe("the static check's parser", () => {
     ["a helper bound by destructuring", `const { sneak } = { sneak: async () => { ${W} } };\n${reg("await sneak();")}`],
     ["a helper bound by array destructuring", `const [sneak] = [async () => { ${W} }];\n${reg("await sneak();")}`],
     ["a helper set by ??=", `let h: (() => Promise<unknown>) | undefined;\nh ??= async () => { ${W} };\n${reg("await h?.();")}`],
+    ["a helper set by destructuring assignment", `let sneak: any;\n({ sneak } = { sneak: async () => { ${W} } });\n${reg("await sneak();")}`],
+    ["a helper set by renamed destructuring assignment", `let s: any;\n({ sneak: s } = { sneak: async () => { ${W} } });\n${reg("await s();")}`],
+    ["a helper set by array destructuring assignment", `let s: any;\n[s] = [async () => { ${W} }];\n${reg("await s();")}`],
+    ["a for...of binding around the registration", `for (const { h } of [{ h: async () => { ${W} } }]) {\n${reg("await h();")}}\n`],
+    ["a plain for...of binding around the registration", `for (const h of [async () => { ${W} }]) {\n${reg("await h();")}}\n`],
+    ["a helper put on a holder by Object.assign", `const box: any = {};\nObject.assign(box, { sneak: async () => { ${W} } });\n${reg("await box.sneak();")}`],
+    ["a helper set through a cast", `const box = {};\n(box as any).sneak = async () => { ${W} };\n${reg("await (box as any).sneak();")}`],
+    ["a helper set through a non-null holder", `const box: { h?: () => Promise<unknown> } | undefined = {};\nbox!.h = async () => { ${W} };\n${reg("await box!.h?.();")}`],
     ["a helper set on an any-typed holder", `const holder: any = {};\nholder.h = async () => { ${W} };\n${reg("await holder.h();")}`],
     ["a helper named like a register function", `async function registerSneakTools() { ${W} }\n${reg("await registerSneakTools();")}`],
   ])("finds a write in %s", (_label, text) => {
+    expect(writes(text)).not.toEqual([]);
+  });
+
+  it("does not charge a block that reads one property of a holder with writes stored under another", () => {
+    const text = `const memo: any = {};\nexport async function other() { memo.w = await metaApiClient.postForm('/x', {}); }\n${reg("void memo.v;")}`;
+    expect(writes(text)).toEqual([]);
+  });
+
+  it("does not pull in a writing function elsewhere because a local shares its name", () => {
+    const text = `export async function sneak() { return metaApiClient.postForm('/x', {}); }\n${reg("const sneak = 1; void sneak;")}`;
+    expect(writes(text)).toEqual([]);
+  });
+
+  it("finds a function reached through a property typed only by an interface", () => {
+    const text = `interface Box { h: () => Promise<unknown> }\nfunction make(): Box { return { h: async () => { ${W} } }; }\nconst box = make();\n${reg("await box.h();")}`;
     expect(writes(text)).not.toEqual([]);
   });
 
