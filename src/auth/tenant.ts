@@ -3,16 +3,16 @@ import { isStdioTransport } from "../utils/transport-mode.js";
 import { getCurrentFbUserId } from "./token-store.js";
 
 /**
- * Storage key for stdio / single-operator mode, where there is no OAuth
- * request context. Facebook user ids are numeric, so this cannot collide with
- * a real tenant. It is only ever reachable via isSingleTenantMode().
+ * Storage key for stdio / single-operator mode, the only mode this fork runs
+ * in (254 M5: no HTTP transport). Facebook user ids are numeric, so this
+ * cannot collide with a real tenant. It is only ever reachable via
+ * isSingleTenantMode().
  */
 export const LOCAL_TENANT_ID = "_local";
 
 /**
- * Reads the env directly rather than resolveSecurityConfig(), which can
- * throw — this runs on every request and must not turn a config problem into
- * an unrelated tool failure.
+ * True under --transport stdio. The env branch is left from the removed HTTP
+ * transport's multi-tenant mode (254 M5); it never decides in stdio.
  */
 export function isSingleTenantMode(argv: readonly string[] = process.argv): boolean {
   if (isStdioTransport(argv)) return true;
@@ -20,12 +20,10 @@ export function isSingleTenantMode(argv: readonly string[] = process.argv): bool
 }
 
 /**
- * Which per-tenant bucket (encrypted credentials, rate limits) this request may use.
- *
- * Fails closed: in multi-tenant HTTP mode an unidentified caller (API-key
- * mode, or any flow that loses the OAuth identity) must NOT silently land in
- * the shared `_local` bucket or on a server-wide fallback credential — that
- * would let one tenant read another's credential or spend their quota.
+ * Which per-tenant bucket (in-memory credentials, rate limits) this call may
+ * use. In this stdio-only fork no request context carries an fbUserId (254
+ * M5 removed the OAuth and API-key flows that set one), so it is `_local`.
+ * The throw below is the removed multi-tenant HTTP mode's fail-closed branch.
  */
 export function resolveTenantId(options: { feature: string; argv?: readonly string[] }): string {
   const fbUserId = getCurrentFbUserId();

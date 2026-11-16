@@ -106,13 +106,12 @@ const PAIR = /(^|[?&#;,/:\s])([A-Za-z0-9%_.\-[\]]{1,64})=([^&#;,\s"'<>]*)/g;
  * when it is at least 8 characters, so a short or empty value cannot blank
  * ordinary text. Trimmed, as the client trims the token it sends (251).
  */
-const ENV_SECRET_NAMES = ["META_ACCESS_TOKEN", "META_APP_SECRET"] as const;
 const MIN_SECRET_LENGTH = 8;
 
 export function envSecrets(): string[] {
   const found: string[] = [];
-  for (const name of ENV_SECRET_NAMES) {
-    const raw = process.env[name];
+  // Each name is read literally, so a static sweep sees every env name read.
+  for (const raw of [process.env.META_ACCESS_TOKEN, process.env.META_APP_SECRET]) {
     if (raw === undefined) continue;
     // Raw, trimmed, and percent-encoded (an app token carries a "|").
     for (const value of new Set([raw, raw.trim(), encodeURIComponent(raw.trim())])) {

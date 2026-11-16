@@ -245,7 +245,8 @@ describe.skipIf(process.platform !== "linux")("M9: readLocalUpload", () => {
       return real.apply(this, args);
     });
     try {
-      const got = await readLocalUpload(root, "big.png");
+      // A 4 MiB limit, so an unbounded read would ask for little more than that.
+      const got = await readLocalUpload(root, "big.png", { maxBytes: 4 * 1024 * 1024 });
       expect(got.size).toBe(3 * 1024 * 1024 + 5);
     } finally {
       spy.mockRestore();

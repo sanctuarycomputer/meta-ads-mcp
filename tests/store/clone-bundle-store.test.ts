@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { getCloneBundleStore, resetCloneBundleStoreForTests, STALE_IN_PROGRESS_MS } from "../../src/store/clone-bundle-store.js";
+import { configureCloneBundleStoreForTests, getCloneBundleStore, resetCloneBundleStoreForTests, STALE_IN_PROGRESS_MS } from "../../src/store/clone-bundle-store.js";
+import { persistentCloneBundleStore } from "../setup.js";
 
 describe.each([
   ["in memory", () => resetCloneBundleStoreForTests(), false],
+  // The tests' persistent double (tests/setup.ts) must keep the same rules.
+  ["persistent test double", () => configureCloneBundleStoreForTests(persistentCloneBundleStore()), true],
 ])("clone bundle store (%s)", (_name, reset, persistent) => {
   beforeEach(() => {
     reset();
@@ -30,6 +33,15 @@ describe.each([
     const claim = await getCloneBundleStore().claim("k", "sig");
 
     expect(claim.status).toBe("claimed");
+  });
+
+  it("never takes over a run still in progress that is not yet stale", async () => {
+    await getCloneBundleStore().claim("k", "sig");
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + STALE_IN_PROGRESS_MS - 1000);
+
+    const claim = await getCloneBundleStore().claim("k", "sig");
+
+    expect(claim.status).toBe("duplicate");
   });
 
   it("never takes over a run, however stale, when asked not to", async () => {

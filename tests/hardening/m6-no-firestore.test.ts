@@ -68,6 +68,12 @@ describe("M6: no Firestore", () => {
     process.env.FIRESTORE_EMULATOR_HOST = "localhost:1";
     expect(getCloneBundleStore().persistent).toBe(false);
     expect(await claimPostEditLease("1_2", "h")).toBe(true);
+    const key = fakeSecret("gemini-env");
+    await getGeminiKeyRepo().saveKey("u1", key);
+    expect(await getGeminiKeyRepo().getDecryptedKey("u1")).toBe(key);
+    const apify = fakeSecret("apify-env");
+    await getApifyTokenRepo().saveToken("u1", apify, null);
+    expect(await getApifyTokenRepo().getDecryptedToken("u1")).toBe(apify);
     await roundTripMetaToken();
   });
 

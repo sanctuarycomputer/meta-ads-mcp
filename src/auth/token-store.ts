@@ -79,7 +79,7 @@ export function hashToken(token: string): string {
  * Returns null if input is null/undefined so callers can pass through
  * optional fields without conditional clutter:
  *
- *   logger.warn({ user: hashPii(profile.email) }, "rejected by allowlist");
+ *   logger.info({ tenant: hashPii(tenant) }, "Gemini key registered");
  */
 export function hashPii(value: string | null | undefined): string | null {
   if (value === null || value === undefined || value === "") return null;
