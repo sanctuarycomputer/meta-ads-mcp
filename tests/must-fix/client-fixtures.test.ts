@@ -41,6 +41,7 @@ function clientAt(baseUrl?: string): MetaApiClient {
 
 // The fixture's path carries Graph's `/v<n>` prefix; the client joins its own.
 const clientPath = (path: string): string => path.replace(/^\/v\d+\.\d+/, "");
+const VIDEO_PATH = "/act_9990000000000001/advideos";
 
 /** Sends one request through `client` inside a write tool's call: a GET, or a POST as a multipart upload. */
 function send(client: MetaApiClient, method: "GET" | "POST", path: string): Promise<unknown> {
@@ -121,6 +122,19 @@ describe("hosts: only the video row moves a request", () => {
     await send(clientAt("https://graph-video.facebook.com"), "POST", "/act_9990000000000001/advideos");
     expect(asked).toBe(1);
     expect(fetches.map((u) => u.host)).toEqual(["graph-video.facebook.com"]);
+  });
+
+  // T2-1: every sender passes its own method to the routing; the fork's video senders today use postForm
+  // (creatives.ts, bulk-ads.ts: ruling O5). A DELETE of the same path matches no host row and stays.
+  it.each([
+    ["post", () => clientAt().post(VIDEO_PATH, { name: "clip", file_url: "https://example.com/clip.mp4" }), "graph-video.facebook.com"],
+    ["postForm", () => clientAt().postForm(VIDEO_PATH, { name: "clip", file_url: "https://example.com/clip.mp4" }), "graph-video.facebook.com"],
+    ["delete", () => clientAt().delete(VIDEO_PATH, { name: "clip" }), "graph.facebook.com"],
+    ["delete (form body)", () => clientAt().delete(VIDEO_PATH, { name: "clip" }, undefined, { formBody: true }), "graph.facebook.com"],
+  ] as const)("%s of /act_<n>/advideos from the default client goes to its host", async (_m, call, host) => {
+    await callContext.run(newCallContext("ads_test_upload", false), call);
+    expect(asked).toBe(1);
+    expect(fetches.map((u) => u.host)).toEqual([host]);
   });
 
   // A request the row does not move keeps the client's base, port and all: the existing checks refuse it first.
