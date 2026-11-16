@@ -212,7 +212,7 @@ export function registerCampaignTools(server: McpServer): void {
         lifetime_budget: z
           .number()
           .optional()
-          .describe("Campaign lifetime budget, in the same unit as daily_budget. Omit to set budgets on the ad sets instead."),
+          .describe("Campaign lifetime budget, in the account currency's MINOR unit, the same unit as daily_budget. Omit to set budgets on the ad sets instead."),
         is_adset_budget_sharing_enabled: z
           .boolean()
           .optional()
@@ -225,7 +225,7 @@ export function registerCampaignTools(server: McpServer): void {
           .positive()
           .max(Number(SPEND_CAP_REMOVAL_MINOR) - 1)
           .optional()
-          .describe("Most the campaign may spend over its lifetime, in the same unit as daily_budget (USD 10000 = USD 100.00, COP 500000 = 500,000 pesos). This is NOT the standard unit of the account spend cap (ads_update_spend_cap). Meta's minimum is about USD 100 in the account currency."),
+          .describe("Most the campaign may spend over its lifetime, in the account currency's MINOR unit, the same unit as daily_budget (USD 10000 = USD 100.00, COP 500000 = 500,000 pesos). This is NOT the standard unit of the account spend cap (ads_update_spend_cap). Meta's minimum is about USD 100 in the account currency. Changing it later with ads_update_campaign takes the STANDARD unit instead (1000 = USD 1,000.00)."),
         special_ad_category_country: z.array(z.string().regex(/^[A-Z]{2}$/)).min(1).optional().describe("Countries (ISO codes) where the special ad categories apply, e.g. [\"CO\"]"),
       },
       annotations: { ...CREATE },
@@ -305,7 +305,7 @@ export function registerCampaignTools(server: McpServer): void {
         name: z.string().optional(),
         status: statusEnum.optional(),
         daily_budget: z.number().optional().describe(`Daily budget ${MINOR_UNIT_NOTE}.`),
-        lifetime_budget: z.number().optional().describe("Lifetime budget, in the same unit as daily_budget."),
+        lifetime_budget: z.number().optional().describe("Lifetime budget, in the account currency's MINOR unit, the same unit as daily_budget. Not the STANDARD unit spend_cap takes here."),
         is_adset_budget_sharing_enabled: z
           .boolean()
           .optional()
