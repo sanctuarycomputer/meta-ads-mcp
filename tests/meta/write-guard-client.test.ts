@@ -18,6 +18,7 @@ import { loadFixtures } from "../fixtures/meta-ads-guard/fake-guard.mjs";
 import { accountsOf, answerGet, scenarioFor } from "../fixtures/meta-ads-guard/harness.js";
 import { TEST_APP_SECRET, cleanupTestToken, createMockMcpServer, mockFetchResponse, setupTestToken } from "../setup.js";
 import { createHmac } from "node:crypto";
+import { PASS } from "../setup-write-gate.js";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const STUBS = join(ROOT, "tests/fixtures/meta-ads-guard/stubs");
@@ -284,8 +285,28 @@ describe("static", () => {
 });
 
 describe("audiences.ts", () => {
-  // The tool's own handler, on the singleton client with the real gate swapped in (T5-2), inside a call context.
-  it("unshares with adaccounts in the query params, through the real gate", async () => {
+  const unshare = async () => {
+    const server = createMockMcpServer();
+    registerAudienceTools(server as never);
+    const tool = server._registeredTools.find((t: { name: string }) => t.name === "ads_unshare_custom_audience")!;
+    return inCall("ads_unshare_custom_audience", () => tool.handler({ audience_id: "8001", ad_account_ids: ["act_1", "2"] }));
+  };
+
+  // The tool's own handler, on the singleton client and its pass-through gate (tests/setup-write-gate.ts): the
+  // query-to-params rule is the client's encoding, which no gate changes.
+  it("unshares with adaccounts in the query params", async () => {
+    world.set("/8001", { id: "8001", metadata: { type: "customaudience" } });
+    await (await unshare()).run;
+    expect(writes()).toHaveLength(1);
+    const [w] = writes();
+    expect(w.method).toBe("DELETE");
+    expect(w.path).toBe("/8001/adaccounts");
+    expect(w.query.get("adaccounts")).toBe('["1","2"]');
+  });
+
+  // Its real-gate twin (T5-2's swap): DELETE /{id}/adaccounts has an empty key set, so with an allowing guard the
+  // client refuses it after the allow (M11, ruled a-20261116-154225089; the real guard refuses that row, rule 8).
+  it("through the real gate and an allowing guard, the client refuses adaccounts, zero Graph writes", async () => {
     world.set("/8001", { id: "8001", metadata: { type: "customaudience" } });
     const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: process.env.HOME ?? "/tmp", META_WRITE_GUARD_CMD: stub("record", log) };
     const singleton = metaApiClient as unknown as { writeGate: unknown };
@@ -294,21 +315,17 @@ describe("audiences.ts", () => {
       (path, params) => metaApiClient.get(path, params),
       new GuardRunner({ env, cwd: ROOT, timeoutMs: 15_000 }),
     );
+    const reason = "adaccounts is not a key of DELETE /{id}/adaccounts";
+    let msg: string;
     try {
-      const server = createMockMcpServer();
-      registerAudienceTools(server as never);
-      const tool = server._registeredTools.find((t: { name: string }) => t.name === "ads_unshare_custom_audience")!;
-      await inCall("ads_unshare_custom_audience", () => tool.handler({ audience_id: "8001", ad_account_ids: ["act_1", "2"] })).run;
+      msg = await refusalOf((await unshare()).run);
     } finally {
       singleton.writeGate = pass;
     }
-    expect(writes()).toHaveLength(1);
-    const [w] = writes();
-    expect(w.method).toBe("DELETE");
-    expect(w.path).toBe("/8001/adaccounts");
-    expect(w.query.get("adaccounts")).toBe('["1","2"]');
+    expect(msg).toBe(refused(reason));
+    expect(writes()).toEqual([]);
     expect(descriptors()).toEqual([expect.objectContaining({ method: "DELETE", path: "/8001/adaccounts", params_keys: ["adaccounts"] })]);
-    expect(outcomes()).toEqual([expect.objectContaining({ outcome_for: descriptors()[0].request_id, ok: true })]);
+    expect(outcomes()).toEqual([{ v: "1.0", outcome_for: descriptors()[0].request_id, ok: false, meta_id: null, error: reason }]);
   });
 });
 
@@ -334,19 +351,19 @@ describe("P8: execution_options on the wire under validate_only, equal to the de
 
   it("postMultipart: the string, appended to the caller's form, its names equal to params_keys", async () => {
     const client = clientWith(stub("record", log));
+    // The file under name, a key of POST /{campaign_id}'s set (M11 refuses any other after the allow).
     const form = new FormData();
-    form.append("name", "asset");
-    form.append("file", new Blob(["x"]), "a.json");
+    form.append("name", new Blob(["x"]), "a.json");
     await inCall("ads_update_campaign", () => client.postMultipart(`/${CAMP}`, form), true).run;
     const sent = writes()[0].init?.body as FormData;
     expect(sent.get("execution_options")).toBe('["validate_only"]');
     expect([...sent.keys()].sort()).toEqual([...descriptors()[0].params_keys].sort());
-    expect(sent.get("file")).toBeInstanceOf(Blob);
+    expect(sent.get("name")).toBeInstanceOf(Blob);
   });
 
   it("delete: in the query", async () => {
     const client = clientWith(stub("record", log));
-    await inCall("ads_delete_ad", () => client.delete(`/${AD}`, { note: "x" }), true).run;
+    await inCall("ads_delete_ad", () => client.delete(`/${AD}`), true).run;
     const w = writes()[0];
     expect(w.query.get("execution_options")).toBe('["validate_only"]');
     expect([...w.query.keys()].filter((k) => k !== "appsecret_proof").sort()).toEqual([...descriptors()[0].params_keys].sort());
@@ -355,7 +372,7 @@ describe("P8: execution_options on the wire under validate_only, equal to the de
 
   it("delete with formBody: in the body", async () => {
     const client = clientWith(stub("record", log));
-    await inCall("ads_delete_ad", () => client.delete(`/${AD}`, { note: "x" }, undefined, { formBody: true }), true).run;
+    await inCall("ads_delete_ad", () => client.delete(`/${AD}`, undefined, undefined, { formBody: true }), true).run;
     const w = writes()[0];
     expect([...w.query.keys()]).toEqual(["appsecret_proof"]);
     expect(new URLSearchParams(String(w.init?.body)).get("execution_options")).toBe('["validate_only"]');
@@ -385,8 +402,9 @@ describe("postForm sends the decoded value re-encoded, the one the descriptor sa
 });
 
 describe("delete, the other form sender, also sends a decoded JSON field re-encoded (R3 sibling)", () => {
+  // The pass-through gate: DELETE /{ad_id} admits no key, so the real gate refuses call_to_action there (M11).
   it.each([[false], [true]])("formBody %s", async (formBody) => {
-    const client = clientWith(stub("record", log));
+    const client = new MetaApiClient({ maxRetries: 0, writeGateForTests: PASS });
     const text = ' { "type" : "a" , "type" : "b" } ';
     await inCall("ads_delete_ad", () => client.delete(`/${AD}`, { call_to_action: text }, undefined, formBody ? { formBody: true } : undefined)).run;
     expect(writes()).toHaveLength(1);
@@ -583,7 +601,7 @@ describe("deciding cases", () => {
 
   it("takes an exact decoded number, safe integers and short decimals", async () => {
     const client = clientWith(stub("record", log));
-    const creative = '{"object_story_spec":{"page_id":"9991000000000001","link_data":{"name":"x"}},"n":12,"f":0.5}';
+    const creative = '{"object_story_spec":{"page_id":"9991000000000001","link_data":{"name":"x"}},"name":12,"url_tags":0.5}';
     await inCall("ads_create_ad", () => client.postForm(`/${ACT}/ads`, { name: "x", creative })).run;
     expect(writes()).toHaveLength(1);
   });

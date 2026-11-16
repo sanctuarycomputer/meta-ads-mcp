@@ -570,6 +570,27 @@ export function matchEndpoint(method: string, path: string, objectType: ObjectTy
   return null;
 }
 
+/**
+ * M11, the client's key-set check (spec check 3): the first key of `params_keys` outside its row's key set, the
+ * union of the row's `keys` lists, `execution_options` aside; `null` when every key is in it. A dotted key is in the
+ * set when the set lists it, or lists its prefix up to a bounded name (`sub_keys`); deeper paths are the guard's
+ * (rule 8, §5.1). A write that matches no row has an empty set (`row: "no row"`).
+ */
+export function keySetMiss(d: Descriptor): { key: string; row: string } | null {
+  const row = matchEndpoint(d.method, d.path, d.object.type);
+  const set = new Set(row ? Object.values(row.keys).flat() : []);
+  const inSet = (key: string): boolean => {
+    if (set.has(key)) return true;
+    const parts = key.split(".");
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (Object.hasOwn(ENDPOINTS.sub_keys, parts[i]) && set.has(parts.slice(0, i + 1).join("."))) return true;
+    }
+    return false;
+  };
+  const key = d.params_keys.find((k) => k !== "execution_options" && !inSet(k));
+  return key === undefined ? null : { key, row: row ? row.id : "no row" };
+}
+
 /** The video upload host (contract 1.1 §2, C14): it takes only the `host_rows` rows, `POST /act_{id}/advideos`. */
 export const VIDEO_HOST = "graph-video.facebook.com";
 
