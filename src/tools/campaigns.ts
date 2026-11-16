@@ -91,7 +91,8 @@ async function campaignCurrency(campaignId: string): Promise<string> {
   }
   const account = await metaApiClient.get<{ currency?: unknown }>(`/act_${accountId}`, { fields: "currency" });
   const currency = account?.currency;
-  if (typeof currency !== "string" || !/^[A-Za-z]{3}$/.test(currency) || currencyOffset(currency) === undefined) {
+  // currencyOffset takes only a three-letter code in Meta's table.
+  if (typeof currency !== "string" || currencyOffset(currency) === undefined) {
     throw new Error(`Meta did not report a known currency for ad account act_${accountId}, so the spend cap was not changed.`);
   }
   return currency.toUpperCase();

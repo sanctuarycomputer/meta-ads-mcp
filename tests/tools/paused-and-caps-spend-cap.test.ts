@@ -36,7 +36,9 @@ function stubMeta(campaign: unknown = { id: "1001", account_id: "123" }, account
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const path = new URL(url).pathname.replace(/^\/v[\d.]+/, "");
     if (init?.method === "POST") return mockFetchResponse({ success: true, id: "1000999" });
-    const answer = /^\/act_\d+$/.test(path) ? account : campaign;
+    // Any /act_ path is the account, so a malformed account id is decided by
+    // the tool's own check, not by the stub.
+    const answer = path.startsWith("/act_") ? account : campaign;
     if (answer instanceof Error) return mockFetchResponse({ error: { code: 100, type: "OAuthException", message: answer.message } }, { status: 400 });
     return mockFetchResponse(answer);
   }));
@@ -100,6 +102,10 @@ describe("266: campaign spend cap", () => {
       },
     );
 
+    it("refuses a currency Meta's table lacks", () => {
+      expect(() => campaignSpendCapMinor(1000, "XYZ")).toThrow(/currency table/);
+    });
+
     it("has one removal value, Meta's", () => {
       expect(SPEND_CAP_REMOVAL_MINOR).toBe("922337203685478");
     });
@@ -162,7 +168,7 @@ describe("266: campaign spend cap", () => {
       expect(posts()).toEqual(["POST /act_123"]);
     });
 
-    it.each([1e-7, 0, "1000"])("refuses spend_cap %s before any request", async (spend_cap) => {
+    it.each([1e-7, 0, "1000", null])("refuses spend_cap %s before any request", async (spend_cap) => {
       stubMeta();
       await expect(update({ campaign_id: "1001", spend_cap })).rejects.toThrow(/plain digits/);
       expect(fetch).not.toHaveBeenCalled();
@@ -174,7 +180,9 @@ describe("266: campaign spend cap", () => {
       ["an account_id that is not digits", { account_id: "act_1" }],
     ])("refuses when the campaign read gives %s", async (_label, campaign) => {
       stubMeta(campaign);
-      await expect(update({ campaign_id: "1001", spend_cap: 1000 })).rejects.toThrow();
+      await expect(update({ campaign_id: "1001", spend_cap: 1000 })).rejects.toThrow(
+        campaign instanceof Error ? /Unsupported get request/ : /did not report campaign 1001's ad account/,
+      );
       expect(posts()).toEqual([]);
     });
 
@@ -185,7 +193,9 @@ describe("266: campaign spend cap", () => {
       ["a currency Meta's table lacks", { currency: "XYZ" }],
     ])("refuses when the account read gives %s", async (_label, account) => {
       stubMeta(undefined, account);
-      await expect(update({ campaign_id: "1001", spend_cap: 1000 })).rejects.toThrow();
+      await expect(update({ campaign_id: "1001", spend_cap: 1000 })).rejects.toThrow(
+        account instanceof Error ? /Unsupported get request/ : /did not report a known currency for ad account act_123/,
+      );
       expect(posts()).toEqual([]);
     });
 
