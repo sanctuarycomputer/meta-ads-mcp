@@ -234,12 +234,6 @@ describe("src/index.ts and isStdioTransport agree (check 3.6)", () => {
     expect(state.httpLoaded).toBe(0);
   });
 
-  it("PORT sets the HTTP port when --port is not given", async () => {
-    const out = await launch(["--transport", "http"], { PORT: "4568" });
-    expect(out.how).toBe("http");
-    expect(state.httpPort).toBe(4568);
-  });
-
   it.each([
     ...STDIO_FORMS,
     ["--transport", "http"],
@@ -254,5 +248,19 @@ describe("src/index.ts and isStdioTransport agree (check 3.6)", () => {
     const out = await launch(argv);
     expect(out.how === "stdio", JSON.stringify(out)).toBe(isStdioTransport(["node", "dist/index.js", ...argv]));
     if (out.how === "exit") expect(out.code).toBe(2);
+  });
+});
+
+describe("the HTTP port", () => {
+  it("PORT sets it when --port is not given", async () => {
+    const out = await launch(["--transport", "http"], { PORT: "4568" });
+    expect(out.how).toBe("http");
+    expect(state.httpPort).toBe(4568);
+  });
+
+  it("--port wins over PORT", async () => {
+    const out = await launch(["--transport", "http", "--port", "4567"], { PORT: "4568" });
+    expect(out.how).toBe("http");
+    expect(state.httpPort).toBe(4567);
   });
 });
