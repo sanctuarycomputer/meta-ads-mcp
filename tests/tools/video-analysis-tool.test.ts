@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { registerVideoAnalysisTools, type VideoAnalysisToolDeps } from "../../src/tools/video-analysis.js";
-import { GeminiAnalysisRateLimitError, PROMPT_VERSION } from "../../src/gemini/video-analysis.js";
+import { GeminiAnalysisRateLimitError } from "../../src/gemini/video-analysis.js";
+
+// The analysis fixture's prompt version; the tool echoes whatever analyze returns.
+const PROMPT_VERSION = "2026-09-17.1";
 import type { VideoSource } from "../../src/media/video-sources.js";
 import { cleanupTestToken, createMockMcpServer, setupTestToken } from "../setup.js";
 
@@ -76,6 +79,32 @@ describe("ads_analyze_video", () => {
     vi.restoreAllMocks();
   });
 
+  it("renders a readable brief, delimits the model's words and returns the JSON analysis", async () => {
+    const { call, analyze } = setup();
+
+    const res = await call({ video_id: "999", language: "es", detail: "standard", quality: "sd" });
+
+    expect(analyze).toHaveBeenCalledTimes(1);
+    const [source, options] = analyze.mock.calls[0] as unknown as [VideoSource, Record<string, unknown>];
+    expect(source.key).toBe("meta:video:999");
+    expect(options).toMatchObject({ language: "es", detail: "standard", quality: "sd" });
+
+    const brief = res.content[0].text;
+    expect(brief).toMatch(/Hook/);
+    expect(brief).toMatch(/4\/5/);
+    expect(brief).toMatch(/Compra ahora/);
+    expect(brief).toMatch(/Añadir subtítulos/);
+    expect(brief).toMatch(/untrusted/i);
+    expect(brief).toMatch(/End of/i);
+    expect(brief).toMatch(/1,?800 tokens|1800 tokens/);
+
+    const json = lastJson(res);
+    expect(json).toMatchObject({ cached: false, model: "gemini-3.8-flash", prompt_version: PROMPT_VERSION, transport: "inline" });
+    expect(json.analysis).toMatchObject({ summary: ANALYSIS.summary });
+    expect((json.video as Record<string, unknown>).duration_seconds).toBe(15.2);
+  });
+
+
   it("registers one read-only tool that explains the cost and the cheaper alternative", () => {
     const { server, tool } = setup();
     expect(server.registerTool).toHaveBeenCalledTimes(1);
@@ -106,31 +135,6 @@ describe("ads_analyze_video", () => {
     expect(schema.focus.safeParse("x".repeat(501)).success).toBe(false);
     expect(schema.card_index.safeParse(-1).success).toBe(false);
     expect(schema.card_index.safeParse(100).success).toBe(false);
-  });
-
-  it("renders a readable brief, delimits the model's words and returns the JSON analysis", async () => {
-    const { call, analyze } = setup();
-
-    const res = await call({ video_id: "999", language: "es", detail: "standard", quality: "sd" });
-
-    expect(analyze).toHaveBeenCalledTimes(1);
-    const [source, options] = analyze.mock.calls[0] as unknown as [VideoSource, Record<string, unknown>];
-    expect(source.key).toBe("meta:video:999");
-    expect(options).toMatchObject({ language: "es", detail: "standard", quality: "sd" });
-
-    const brief = res.content[0].text;
-    expect(brief).toMatch(/Hook/);
-    expect(brief).toMatch(/4\/5/);
-    expect(brief).toMatch(/Compra ahora/);
-    expect(brief).toMatch(/Añadir subtítulos/);
-    expect(brief).toMatch(/untrusted/i);
-    expect(brief).toMatch(/End of/i);
-    expect(brief).toMatch(/1,?800 tokens|1800 tokens/);
-
-    const json = lastJson(res);
-    expect(json).toMatchObject({ cached: false, model: "gemini-3.8-flash", prompt_version: PROMPT_VERSION, transport: "inline" });
-    expect(json.analysis).toMatchObject({ summary: ANALYSIS.summary });
-    expect((json.video as Record<string, unknown>).duration_seconds).toBe(15.2);
   });
 
   it("keeps the model's text on single lines so it cannot forge the brief's structure", async () => {
@@ -275,16 +279,5 @@ describe("ads_analyze_video for an ad that reuses a post", () => {
 
     const [source] = analyze.mock.calls[0] as unknown as [VideoSource];
     expect(source).toMatchObject({ video_id: "6101", source_url: IG_URL });
-  });
-
-  it("says where the file is when Meta and Instagram give none", async () => {
-    const { call } = setup({
-      analyze: undefined,
-      resolveVideoSources: undefined,
-      resolveKey: async () => ({ key: "k", source: "env", tenantId: "tenant-1" }),
-    } as never);
-    vi.stubGlobal("fetch", route({ "5101": POST_CREATIVE, "6101": PAGE_VIDEO }));
-
-    await expect(call({ ad_id: undefined, creative_id: "5101" })).rejects.toThrow(/view_all_page_id=7101/);
   });
 });

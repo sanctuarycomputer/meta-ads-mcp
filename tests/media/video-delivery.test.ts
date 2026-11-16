@@ -391,7 +391,7 @@ describe("deliverVideos", () => {
     expect(JSON.stringify(result.videos)).not.toContain("/tmp/");
   });
 
-  it("downloads Ad Library thumbnails behind the Meta CDN host allowlist", async () => {
+  it("passes Ad Library thumbnails an empty host allowlist (254 M10: every host refused)", async () => {
     let received: string[] | undefined;
     const deps = fakeDeps({
       downloadImage: async (url, opts) => {
@@ -401,7 +401,8 @@ describe("deliverVideos", () => {
     });
     const library = { ...SOURCE, key: "library:1:video:0", origin: "ad_library" as const, ad_archive_id: "12345678901", card_index: 0 };
     await deliverVideos([library], { delivery: "thumbnail" }, deps, CTX);
-    expect(received).toEqual(expect.arrayContaining([".fbcdn.net"]));
+    // 254 M10: the allowlist is empty, so the downloader would refuse every host.
+    expect(received).toEqual([]);
   });
 
   it("url mode only links https urls on allowed hosts and never emits a block without a uri", async () => {

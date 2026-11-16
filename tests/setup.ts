@@ -2,33 +2,32 @@
  * Shared test helpers and mocks.
  */
 import { vi } from "vitest";
-import type { Firestore } from "@google-cloud/firestore";
+import { STALE_IN_PROGRESS_MS, type CloneBundleRecord, type CloneBundleStore } from "../src/store/clone-bundle-store.js";
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 
 /**
- * The parts of Firestore the stores use, kept in a map: a read always sees
- * the last write, as Firestore's own reads do.
+ * A clone-bundle store that claims to persist, kept in a map. The fork's own
+ * store never persists (254 M6), so ads_duplicate_ad refuses a real run; tests
+ * of that run install this double with configureCloneBundleStoreForTests.
  */
-export function fakeFirestore(): Firestore {
-  const docs = new Map<string, Record<string, unknown>>();
-  const snap = (key: string) => ({ exists: docs.has(key), data: () => docs.get(key) });
-  const ref = (key: string) => ({
-    key,
-    get: async () => snap(key),
-    set: async (data: Record<string, unknown>, options?: { merge?: boolean }) => {
-      docs.set(key, options?.merge ? { ...docs.get(key), ...data } : { ...data });
-    },
-  });
-  type Ref = ReturnType<typeof ref>;
+export function persistentCloneBundleStore(): CloneBundleStore {
+  const map = new Map<string, CloneBundleRecord>();
   return {
-    collection: (name: string) => ({ doc: (id: string) => ref(`${name}/${id}`) }),
-    runTransaction: async (work: (tx: unknown) => Promise<unknown>) => work({
-      get: async (r: Ref) => snap(r.key),
-      set: (r: Ref, data: Record<string, unknown>) => { docs.set(r.key, { ...data }); },
-      update: (r: Ref, data: Record<string, unknown>) => { docs.set(r.key, { ...docs.get(r.key), ...data }); },
-      delete: (r: Ref) => { docs.delete(r.key); },
-    }),
-  } as unknown as Firestore;
+    persistent: true,
+    getDoc: async (key) => map.get(key),
+    claim: async (key, signature, options = {}) => {
+      const existing = map.get(key);
+      const stale = existing !== undefined && options.reclaimStale !== false
+        && existing.state === "in_progress" && Date.now() - existing.startedAt > STALE_IN_PROGRESS_MS;
+      if (existing && !stale) return { status: "duplicate", existing };
+      map.set(key, { cacheKey: key, signature, state: "in_progress", startedAt: Date.now(), createdResources: { creativeIds: [], adIds: [] } });
+      return { status: "claimed" };
+    },
+    update: async (key, partial) => {
+      const existing = map.get(key);
+      if (existing) map.set(key, { ...existing, ...partial });
+    },
+  };
 }
 
 /** The app secret the tests sign with: every Graph request needs one. */

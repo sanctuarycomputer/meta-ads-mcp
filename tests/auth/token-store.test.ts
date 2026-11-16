@@ -35,12 +35,9 @@ describe("getAccessToken", () => {
 
   // Trimmed where it is read, so the value sent, signed, hashed and scrubbed
   // is one string (meta-ads-mcp-251 final-2b R1).
-  it("trims a context, registered or env token", () => {
+  // 254 M4: no token can be registered, so the sources are context and env.
+  it("trims a context or env token", () => {
     expect(requestContext.run({ accessToken: " ctx-token\n" }, () => getAccessToken())).toBe("ctx-token");
-    tokenManager.registerToken("main", "\tmanager-token \n");
-    tokenManager.setActiveToken("main");
-    expect(getAccessToken()).toBe("manager-token");
-    tokenManager.resetForTests();
     process.env.META_ACCESS_TOKEN = "env-token\r\n";
     expect(getAccessToken()).toBe("env-token");
   });
@@ -54,6 +51,18 @@ describe("getAccessToken", () => {
   it("never lets a blank context token fall back to the process token", () => {
     process.env.META_ACCESS_TOKEN = "env-token";
     expect(requestContext.run({ accessToken: "  \n" }, () => getAccessToken())).toBe("");
+  });
+
+  // 251 final-3 F2 / final-3b R2, fixed in 254: an empty string is blank too.
+  it("never lets an empty context token fall back to the process token", () => {
+    process.env.META_ACCESS_TOKEN = "env-token";
+    expect(requestContext.run({ accessToken: "" }, () => getAccessToken())).toBe("");
+  });
+
+  it("falls back to the env token when the context carries no token string", () => {
+    process.env.META_ACCESS_TOKEN = "env-token";
+    const ctx = { fbUserId: "u1" } as unknown as { accessToken: string };
+    expect(requestContext.run(ctx, () => getAccessToken())).toBe("env-token");
   });
 
   it("throws when no token is available", () => {

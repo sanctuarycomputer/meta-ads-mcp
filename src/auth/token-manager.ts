@@ -1,5 +1,3 @@
-import { logger } from "../utils/logger.js";
-
 export class TokenManager {
   private tokens = new Map<string, string>();
   private activeTokenName: string | null = null;
@@ -17,42 +15,16 @@ export class TokenManager {
     this.loadFromEnv();
   }
 
+  /**
+   * 254 M4: one token, META_ACCESS_TOKEN, under the name "default". The
+   * multi-token registry (META_TOKENS, registered tokens) is gone, so a
+   * credential can come from one place only.
+   */
   private loadFromEnv(): void {
-    const metaTokensJson = process.env.META_TOKENS;
-    if (metaTokensJson) {
-      try {
-        const parsed: unknown = JSON.parse(metaTokensJson);
-        if (
-          typeof parsed === "object" &&
-          parsed !== null &&
-          !Array.isArray(parsed)
-        ) {
-          for (const [name, token] of Object.entries(parsed)) {
-            if (typeof token === "string" && token.length > 0) {
-              this.tokens.set(name, token);
-            }
-          }
-          const firstKey = Object.keys(parsed)[0];
-          if (firstKey && this.tokens.has(firstKey)) {
-            this.activeTokenName = firstKey;
-          }
-          logger.info(
-            { count: this.tokens.size },
-            "Loaded tokens from META_TOKENS",
-          );
-        }
-      } catch (err) {
-        logger.error({ error: err }, "Failed to parse META_TOKENS JSON");
-      }
-    }
-
-    // Fallback: register META_ACCESS_TOKEN as "default" if not already present
     const singleToken = process.env.META_ACCESS_TOKEN;
-    if (singleToken && !this.tokens.has("default")) {
+    if (singleToken) {
       this.tokens.set("default", singleToken);
-      if (!this.activeTokenName) {
-        this.activeTokenName = "default";
-      }
+      this.activeTokenName = "default";
     }
   }
 
@@ -67,12 +39,9 @@ export class TokenManager {
     return this.activeTokenName;
   }
 
-  setActiveToken(name: string): boolean {
-    this.ensureEnvLoaded();
-    if (!this.tokens.has(name)) return false;
-    this.activeTokenName = name;
-    logger.info({ tokenName: name }, "Active token changed");
-    return true;
+  /** 254 M4: there is one token, so there is nothing to switch to. */
+  setActiveToken(_name: string): boolean {
+    return false;
   }
 
   listTokens(): { active: string | null; available: string[] } {
@@ -83,13 +52,9 @@ export class TokenManager {
     };
   }
 
-  registerToken(name: string, token: string): void {
-    this.ensureEnvLoaded();
-    this.tokens.set(name, token);
-    if (!this.activeTokenName) {
-      this.activeTokenName = name;
-    }
-    logger.info({ tokenName: name }, "Token registered");
+  /** 254 M4: tokens come only from META_ACCESS_TOKEN. */
+  registerToken(_name: string, _token: string): void {
+    throw new Error("removed in this fork: tokens come only from META_ACCESS_TOKEN");
   }
 
   hasTokens(): boolean {
@@ -105,10 +70,9 @@ export class TokenManager {
   }
 }
 
-/** Mask a token for safe display: first 10 chars + "..." */
-export function maskToken(token: string): string {
-  if (token.length <= 10) return token.slice(0, 3) + "***";
-  return token.slice(0, 10) + "...";
+/** 254 M4: a fixed mask; no character of the token is shown. */
+export function maskToken(_token: string): string {
+  return "[masked]";
 }
 
 export const tokenManager = new TokenManager();

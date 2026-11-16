@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerGeminiKeyTools, type GeminiKeyToolDeps } from "../../src/tools/gemini-keys.js";
 import { InMemoryGeminiKeyRepo, configureGeminiKeyRepoForTests, type GeminiKeyRepo } from "../../src/store/gemini-key-repo.js";
-import { GeminiApiError } from "../../src/gemini/client.js";
-import { resetKeyCacheForTests } from "../../src/auth/crypto.js";
 import { createMockMcpServer } from "../setup.js";
 
 const KEY = "AQ.test_gemini_fixture_key_000";
@@ -26,17 +24,13 @@ function setup(overrides: Partial<GeminiKeyToolDeps> = {}) {
 
 describe("gemini key tools", () => {
   beforeEach(() => {
-    process.env.TOKEN_ENCRYPTION_KEY = "a".repeat(64);
-    resetKeyCacheForTests();
     delete process.env.GEMINI_API_KEY;
     delete process.env.META_APP_ID;
     delete process.env.META_APP_SECRET;
   });
 
   afterEach(() => {
-    delete process.env.TOKEN_ENCRYPTION_KEY;
     delete process.env.GEMINI_API_KEY;
-    resetKeyCacheForTests();
     configureGeminiKeyRepoForTests(undefined);
     vi.restoreAllMocks();
   });
@@ -71,7 +65,7 @@ describe("gemini key tools", () => {
 
   it("does not store the key when Gemini rejects it, and says why", async () => {
     const { call, repo } = setup({
-      client: { validateKey: vi.fn(async () => { throw new GeminiApiError(`Gemini rejected the API key — bad (${KEY})`, 400, "API_KEY_INVALID"); }) } as never,
+      client: { validateKey: vi.fn(async () => { throw new Error(`Gemini rejected the API key — bad (${KEY})`); }) } as never,
     });
 
     const result = await call("ads_register_gemini_key", { gemini_api_key: KEY });
@@ -89,15 +83,11 @@ describe("gemini key tools", () => {
     expect(validateKey).not.toHaveBeenCalled();
   });
 
-  it("reports the encrypted source, the env fallback and none", async () => {
+  it("reports none, then the encrypted source without the key (254 M7: no env fallback)", async () => {
     const { call, repo } = setup();
     let status = await call("ads_get_gemini_key_status");
     expect(JSON.parse(status.content[1].text)).toMatchObject({ source: "none", envFallbackAvailable: false, registered: false });
     expect(status.content[0].text).toMatch(/ads_register_gemini_key/);
-
-    process.env.GEMINI_API_KEY = "AQ.env_fixture_key_0000000000";
-    status = await call("ads_get_gemini_key_status");
-    expect(JSON.parse(status.content[1].text)).toMatchObject({ source: "env" });
 
     await repo.saveKey("tenant-1", KEY);
     status = await call("ads_get_gemini_key_status");
@@ -123,7 +113,7 @@ describe("gemini key tools", () => {
     expect(validateKey).toHaveBeenCalledWith(KEY);
     expect(JSON.parse(status.content[1].text)).toMatchObject({ verification: "valid" });
 
-    const failing = setup({ client: { validateKey: vi.fn(async () => { throw new GeminiApiError("Gemini rejected the API key", 400, "API_KEY_INVALID"); }) } as never });
+    const failing = setup({ client: { validateKey: vi.fn(async () => { throw new Error("Gemini rejected the API key"); }) } as never });
     await failing.repo.saveKey("tenant-1", KEY);
     const bad = await failing.call("ads_get_gemini_key_status", { verify: true });
     expect(JSON.parse(bad.content[1].text).verification).toMatch(/^invalid/);
@@ -138,14 +128,6 @@ describe("gemini key tools", () => {
 
     const missing = await call("ads_delete_gemini_key");
     expect(missing.isError).toBe(true);
-  });
-
-  it("warns that the env fallback stays active after a delete", async () => {
-    process.env.GEMINI_API_KEY = "AQ.env_fixture_key_0000000000";
-    const { call, repo } = setup();
-    await repo.saveKey("tenant-1", KEY);
-    const result = await call("ads_delete_gemini_key");
-    expect(result.content[0].text).toMatch(/GEMINI_API_KEY environment fallback is still active/);
   });
 
   it("fails closed for an unidentified multi-tenant caller", async () => {

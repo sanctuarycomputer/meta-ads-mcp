@@ -21,6 +21,8 @@ const CREDENTIAL_NAMES = [
   "app_secret",
   "client_token",
   "signed_request",
+  // The HMAC of the token under the app secret (251): it authorizes calls too.
+  "appsecret_proof",
   "oauth_token",
   "refresh_token",
   "id_token",
@@ -99,6 +101,34 @@ export function mentionsCredential(text: string): boolean {
 const PAIR = /(^|[?&#;,/:\s])([A-Za-z0-9%_.\-[\]]{1,64})=([^&#;,\s"'<>]*)/g;
 
 /**
+ * The process's own secrets, read on every call so a value set or changed
+ * after start-up is covered: META_ACCESS_TOKEN and META_APP_SECRET, each only
+ * when it is at least 8 characters, so a short or empty value cannot blank
+ * ordinary text. Trimmed, as the client trims the token it sends (251).
+ */
+const MIN_SECRET_LENGTH = 8;
+
+export function envSecrets(): string[] {
+  const found: string[] = [];
+  // Each name is read literally, so a static sweep sees every env name read.
+  for (const raw of [process.env.META_ACCESS_TOKEN, process.env.META_APP_SECRET]) {
+    if (raw === undefined) continue;
+    // Raw, trimmed, and percent-encoded (an app token carries a "|").
+    for (const value of new Set([raw, raw.trim(), encodeURIComponent(raw.trim())])) {
+      if (value.length >= MIN_SECRET_LENGTH) found.push(value);
+    }
+  }
+  // Longest first, so a secret that contains another is removed whole.
+  return found.sort((a, b) => b.length - a.length);
+}
+
+function removeEnvSecrets(text: string): string {
+  let out = text;
+  for (const secret of envSecrets()) out = out.split(secret).join(REDACTED);
+  return out;
+}
+
+/**
  * Removes the value of any credential-shaped parameter from free text: a url
  * inside a sentence, an error message that quoted one, a fragment, or a value
  * that does not parse as a url at all. The name survives, so a reader can see
@@ -109,6 +139,7 @@ const PAIR = /(^|[?&#;,/:\s])([A-Za-z0-9%_.\-[\]]{1,64})=([^&#;,\s"'<>]*)/g;
  * parameter after it is not swallowed.
  */
 export function scrubCredentials(text: string): string {
+  text = removeEnvSecrets(text);
   if (!text.includes("=")) return text;
   return text.replace(PAIR, (match, prefix: string, name: string, value: string) => {
     if (value.length === 0 || !isCredentialName(name)) return match;

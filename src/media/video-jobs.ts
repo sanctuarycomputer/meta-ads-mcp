@@ -217,21 +217,15 @@ export async function sweepStaleVideoDirs(options: { tmpRoot?: string; olderThan
   return removed;
 }
 
-function envInt(name: string, fallback: number): number {
-  const raw = process.env[name]?.trim();
-  if (!raw) return fallback;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
 let defaultRunner: VideoJobRunner | undefined;
 
 export function getVideoJobRunner(): VideoJobRunner {
   if (!defaultRunner) {
     defaultRunner = createVideoJobRunner({
-      maxConcurrent: envInt("VIDEO_MAX_CONCURRENT_JOBS", DEFAULT_MAX_CONCURRENT),
-      budgetMs: envInt("VIDEO_CALL_BUDGET_MS", DEFAULT_BUDGET_MS),
-      perTenantPerHour: envInt("VIDEO_JOBS_PER_TENANT_PER_HOUR", DEFAULT_PER_TENANT_PER_HOUR),
+      // 254 M10: the defaults; the VIDEO_* env knobs are not read.
+      maxConcurrent: DEFAULT_MAX_CONCURRENT,
+      budgetMs: DEFAULT_BUDGET_MS,
+      perTenantPerHour: DEFAULT_PER_TENANT_PER_HOUR,
     });
   }
   return defaultRunner;

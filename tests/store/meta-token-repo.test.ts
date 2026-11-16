@@ -1,15 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetKeyCacheForTests } from "../../src/auth/crypto.js";
 import {
   InMemoryMetaTokenRepo,
   type MetaTokenRepo,
 } from "../../src/store/meta-token-repo.js";
 import * as metaOAuth from "../../src/auth/meta-oauth.js";
 
-const ENCRYPTION_KEY = "a".repeat(64);
-const APP_ID = "test-app";
-const APP_SECRET = "test-secret";
-const SERVER_URL = new URL("http://localhost:3000");
 
 const profile = {
   id: "fb-1",
@@ -33,26 +28,12 @@ function makeInput(overrides: Partial<Parameters<MetaTokenRepo["saveToken"]>[0]>
 
 describe("InMemoryMetaTokenRepo", () => {
   let repo: InMemoryMetaTokenRepo;
-  const originalKey = process.env.TOKEN_ENCRYPTION_KEY;
-  const originalAppId = process.env.META_APP_ID;
-  const originalAppSecret = process.env.META_APP_SECRET;
 
   beforeEach(() => {
-    process.env.TOKEN_ENCRYPTION_KEY = ENCRYPTION_KEY;
-    process.env.META_APP_ID = APP_ID;
-    process.env.META_APP_SECRET = APP_SECRET;
-    resetKeyCacheForTests();
     repo = new InMemoryMetaTokenRepo();
   });
 
   afterEach(() => {
-    if (originalKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
-    else process.env.TOKEN_ENCRYPTION_KEY = originalKey;
-    if (originalAppId === undefined) delete process.env.META_APP_ID;
-    else process.env.META_APP_ID = originalAppId;
-    if (originalAppSecret === undefined) delete process.env.META_APP_SECRET;
-    else process.env.META_APP_SECRET = originalAppSecret;
-    resetKeyCacheForTests();
     vi.restoreAllMocks();
   });
 
@@ -112,57 +93,14 @@ describe("InMemoryMetaTokenRepo", () => {
     expect(plaintext).toBe("system-user-token");
   });
 
-  it("returns plaintext when not within refresh window", async () => {
-    const farFuture = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60;
-    await repo.saveToken(
-      makeInput({ accessToken: "still-valid", expiresAt: farFuture }),
-    );
-
-    const spy = vi.spyOn(metaOAuth, "exchangeForLongLivedToken");
-    const plaintext = await repo.getDecryptedToken("fb-1", "personal", SERVER_URL);
-    expect(plaintext).toBe("still-valid");
-    expect(spy).not.toHaveBeenCalled();
-  });
-
-  it("refreshes long-lived tokens within the refresh window", async () => {
+  it("returns the stored token near or past expiry without exchanging it (no refresh path)", async () => {
+    const exchange = vi.spyOn(metaOAuth, "exchangeForLongLivedToken");
     const soon = Math.floor(Date.now() / 1000) + 24 * 60 * 60;
-    await repo.saveToken(makeInput({ accessToken: "old-token", expiresAt: soon }));
-
-    vi.spyOn(metaOAuth, "exchangeForLongLivedToken").mockResolvedValueOnce({
-      accessToken: "new-token",
-      expiresAt: Math.floor(Date.now() / 1000) + 60 * 24 * 60 * 60,
-    });
-
-    const plaintext = await repo.getDecryptedToken("fb-1", "personal", SERVER_URL);
-    expect(plaintext).toBe("new-token");
-
-    const second = await repo.getDecryptedToken("fb-1", "personal", SERVER_URL);
-    expect(second).toBe("new-token");
-  });
-
-  it("returns existing plaintext when refresh fails but token is not yet expired", async () => {
-    const soon = Math.floor(Date.now() / 1000) + 24 * 60 * 60;
-    await repo.saveToken(makeInput({ accessToken: "still-good", expiresAt: soon }));
-
-    vi.spyOn(metaOAuth, "exchangeForLongLivedToken").mockRejectedValueOnce(
-      new Error("network error"),
-    );
-
-    const plaintext = await repo.getDecryptedToken("fb-1", "personal", SERVER_URL);
-    expect(plaintext).toBe("still-good");
-  });
-
-  it("throws when refresh fails and the token is already expired", async () => {
-    const expiredAt = Math.floor(Date.now() / 1000) - 60;
-    await repo.saveToken(makeInput({ accessToken: "rotten", expiresAt: expiredAt }));
-
-    vi.spyOn(metaOAuth, "exchangeForLongLivedToken").mockRejectedValueOnce(
-      new Error("OAuthException: token expired"),
-    );
-
-    await expect(
-      repo.getDecryptedToken("fb-1", "personal", SERVER_URL),
-    ).rejects.toThrow(/expired and refresh failed/);
+    await repo.saveToken(makeInput({ accessToken: "near-expiry", expiresAt: soon }));
+    expect(await repo.getDecryptedToken("fb-1", "personal")).toBe("near-expiry");
+    await repo.saveToken(makeInput({ name: "old", accessToken: "past-expiry", expiresAt: soon - 2 * 24 * 60 * 60 }));
+    expect(await repo.getDecryptedToken("fb-1", "old")).toBe("past-expiry");
+    expect(exchange).not.toHaveBeenCalled();
   });
 
   it("throws when no token is registered", async () => {

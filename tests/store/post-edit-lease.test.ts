@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import type { Firestore } from "@google-cloud/firestore";
 import {
   advancePostEditGeneration,
   claimPostEditLease,
@@ -8,27 +7,8 @@ import {
   resetPostEditLeasesForTests,
 } from "../../src/store/post-edit-lease.js";
 
-// The parts of Firestore the leases use, kept in a map: a read always sees
-// the last write, as Firestore's own reads do.
-function fakeFirestore(): Firestore {
-  const docs = new Map<string, Record<string, unknown>>();
-  const snap = (key: string) => ({ exists: docs.has(key), data: () => docs.get(key) });
-  const ref = (key: string) => ({ key, get: async () => snap(key) });
-  type Ref = ReturnType<typeof ref>;
-  return {
-    collection: (name: string) => ({ doc: (id: string) => ref(`${name}/${id}`) }),
-    runTransaction: async (work: (tx: unknown) => Promise<unknown>) => work({
-      get: async (r: Ref) => snap(r.key),
-      set: (r: Ref, data: Record<string, unknown>) => { docs.set(r.key, { ...data }); },
-      update: (r: Ref, data: Record<string, unknown>) => { docs.set(r.key, { ...docs.get(r.key), ...data }); },
-      delete: (r: Ref) => { docs.delete(r.key); },
-    }),
-  } as unknown as Firestore;
-}
-
 describe.each([
   ["in memory", () => resetPostEditLeasesForTests()],
-  ["in Firestore", () => resetPostEditLeasesForTests(fakeFirestore())],
 ])("post edit leases (%s)", (_name, reset) => {
   beforeEach(() => {
     reset();

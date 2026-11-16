@@ -421,10 +421,9 @@ let defaultFfmpeg: Ffmpeg | undefined;
 
 export function getFfmpeg(): Ffmpeg {
   if (!defaultFfmpeg) {
-    defaultFfmpeg = createFfmpeg({
-      ffmpegPath: process.env.FFMPEG_PATH?.trim() || undefined,
-      ffprobePath: process.env.FFPROBE_PATH?.trim() || undefined,
-    });
+    // 254 M10: FFMPEG_PATH and FFPROBE_PATH are not read; the binaries are
+    // found on the child's PATH.
+    defaultFfmpeg = createFfmpeg({});
   }
   return defaultFfmpeg;
 }
