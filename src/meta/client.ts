@@ -275,8 +275,10 @@ export class MetaApiClient {
     let auth: { Authorization: string };
     try {
       auth = signGraphRequest(url, token);
-    } catch {
-      logger.debug({ event: "meta_detached_unsigned", path }, "Detached read not sent: META_APP_SECRET is not set");
+    } catch (err) {
+      // Either refusal of signGraphRequest: no app secret, or a token that
+      // can't be sent. Neither message quotes the token.
+      logger.debug({ event: "meta_detached_unsigned", path }, `Detached read not sent: ${(err as Error).message}`);
       return undefined;
     }
     const response = await fetch(url.toString(), { method: "GET", signal, redirect: "error", headers: auth });

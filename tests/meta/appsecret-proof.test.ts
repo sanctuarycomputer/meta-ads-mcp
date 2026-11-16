@@ -5,7 +5,9 @@ import { RateLimiter } from "../../src/meta/rate-limiter.js";
 import { WritePacer } from "../../src/meta/write-pacer.js";
 import { withPageToken } from "../../src/meta/page-token.js";
 import { tokenManager } from "../../src/auth/token-manager.js";
-import { requestContext } from "../../src/auth/token-store.js";
+import { getAccessToken, getAccessTokenHash, requestContext } from "../../src/auth/token-store.js";
+import { scrubbed } from "../../src/meta/read-list.js";
+import { logger } from "../../src/utils/logger.js";
 import { TEST_APP_SECRET, bearerTokenOf, cleanupTestToken, mockFetchResponse, setupTestToken } from "../setup.js";
 
 // Every Graph request is signed (fork review M1, M2): the token travels only
@@ -214,6 +216,8 @@ describe("signGraphRequest", () => {
 const LEFT = "LEFTPIECE";
 const RIGHT = "RIGHTPIECE";
 const BAD_TOKENS = ["\n", "\r", "\r\n", " ", "\t", "\u0000", "\u007f", "\u00e9", "\u2028"].map((c) => [JSON.stringify(c), `${LEFT}${c}${RIGHT}`]);
+// A token of whitespace only trims to nothing, and an empty one is nothing (final-2b R4).
+const EMPTY_TOKENS = [["empty", ""], ["blank", "  \n\t "]];
 const quotes = (text: string) => text.includes(LEFT) || text.includes(RIGHT);
 
 describe("a token that can't be a header value", () => {
@@ -243,6 +247,19 @@ describe("a token that can't be a header value", () => {
     expect(quotes(message)).toBe(false);
   });
 
+  it.each(EMPTY_TOKENS)("signGraphRequest refuses an %s token", (_label, bad) => {
+    expect(() => signGraphRequest(new URL("https://graph.facebook.com/v27.0/me"), bad)).toThrow(/access token/i);
+  });
+
+  it("logs a detached read refused for its token as such, not as a missing secret", async () => {
+    const debug = vi.spyOn(logger, "debug");
+    await expect(client.getDetached("/act_1", { fields: "currency" }, new AbortController().signal, `${LEFT}\n${RIGHT}`)).resolves.toBeUndefined();
+    const lines = debug.mock.calls.map((args) => JSON.stringify(args)).join("\n");
+    expect(lines).toMatch(/access token/i);
+    expect(lines).not.toMatch(/META_APP_SECRET is not set/);
+    expect(quotes(lines)).toBe(false);
+  });
+
   it.each(BAD_TOKENS)("a client request with a token holding %s is refused unsent and unquoted", async (_label, bad) => {
     const failure = await requestContext.run({ accessToken: bad }, () => client.get("/me")).then(() => undefined, (err: unknown) => err as Error);
     expect(failure).toBeInstanceOf(Error);
@@ -260,6 +277,53 @@ describe("a token that can't be a header value", () => {
     const [url, init] = calls()[0];
     expect(bearerTokenOf(init)).toBe(TOKEN);
     expect(new URL(url).searchParams.get("appsecret_proof")).toBe(expectedProof(TOKEN));
+  });
+
+  // The token is trimmed where it is read, so the value sent, signed, hashed
+  // and scrubbed is one string (final-2b R1, final-2 F1).
+  const logged = () => [logger.info, logger.warn, logger.error, logger.fatal, logger.debug]
+    .flatMap((fn) => vi.mocked(fn).mock.calls)
+    .map((args) => JSON.stringify(args))
+    .join("\n");
+  const quoteBack = () => mockFetchResponse(
+    { error: { code: 190, type: "OAuthException", message: `Bad token ${TOKEN} seen` } },
+    { status: 400 },
+  );
+
+  it.each([["request context", "context"], ["env", "env"]])(
+    "scrubs a padded %s token from a Meta error that quotes it, in the error and the logs",
+    async (_label, where) => {
+      for (const level of ["info", "warn", "error", "fatal", "debug"] as const) vi.spyOn(logger, level);
+      vi.mocked(fetch).mockResolvedValue(quoteBack());
+      const padded = `${TOKEN}\n`;
+      if (where === "env") process.env.META_ACCESS_TOKEN = padded;
+      const call = () => client.get("/me");
+      const failure = await (where === "env" ? call() : requestContext.run({ accessToken: padded }, call))
+        .then(() => undefined, (err: unknown) => err as Error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure?.message)).not.toContain(TOKEN);
+      expect(logged()).not.toContain(TOKEN);
+    },
+  );
+
+  it("scrubs a padded token from a transport error that quotes it", async () => {
+    process.env.META_ACCESS_TOKEN = `${TOKEN}\n`;
+    vi.mocked(fetch).mockRejectedValue(new TypeError(`connect failed for ${TOKEN}`));
+    const failure = await client.get("/me").then(() => undefined, (err: unknown) => err as Error);
+    expect(String(failure?.message)).not.toContain(TOKEN);
+  });
+
+  it("scrubs a padded token from a successful answer cleaned by scrubbed()", () => {
+    process.env.META_ACCESS_TOKEN = `${TOKEN}\n`;
+    expect(JSON.stringify(scrubbed({ note: `a note quoting ${TOKEN} here` }))).not.toContain(TOKEN);
+  });
+
+  it("reads a padded token as the trimmed one, so its rate state is keyed as the client keys it", async () => {
+    process.env.META_ACCESS_TOKEN = `  ${TOKEN}\n`;
+    expect(getAccessToken()).toBe(TOKEN);
+    vi.mocked(fetch).mockResolvedValue(mockFetchResponse({ id: "1" }, { headers: { "x-app-usage": JSON.stringify({ call_count: 12, total_cputime: 3, total_time: 4 }) } }));
+    await client.get("/act_123/campaigns");
+    expect(client.getUsageSnapshotFor(getAccessTokenHash()).usage.length).toBeGreaterThan(0);
   });
 
   it("trims an env token the same way", async () => {
