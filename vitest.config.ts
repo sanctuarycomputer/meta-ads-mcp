@@ -6,5 +6,6 @@ export default defineConfig({
     include: ["tests/**/*.test.ts"],
     globals: true,
     restoreMocks: true,
+    setupFiles: ["tests/setup-write-gate.ts"],
   },
 });

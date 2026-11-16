@@ -283,12 +283,10 @@ export function registerAudienceTools(server: McpServer): void {
         normalizeAccountId(a).slice("act_".length),
       );
 
-      const query = new URLSearchParams({
-        adaccounts: JSON.stringify(numericAccounts),
-      }).toString();
-
+      // In the params, never in the path: the client refuses a path with a query (contract §2).
       const response = await metaApiClient.delete<{ success?: boolean }>(
-        `/${id}/adaccounts?${query}`,
+        `/${id}/adaccounts`,
+        { adaccounts: JSON.stringify(numericAccounts) },
       );
 
       if (response?.success !== true) {
@@ -547,16 +545,19 @@ export function registerAudienceTools(server: McpServer): void {
       const moreRejected = rejected.length > MAX_REJECTED_SHOWN ? [`and ${rejected.length - MAX_REJECTED_SHOWN} more rows`] : [];
       if (data.length === 0) throw new Error(`No row could be used: ${[...rejectedLines, ...moreRejected].join("; ")}.`);
 
-      // The hashes go in the form body, never in a URL; removal is a POST
-      // with method=DELETE, which Meta takes (measured). Meta's error text
-      // could quote what was sent, so only its code comes back.
+      // The hashes go in the form body, never in a URL; removal is a real
+      // DELETE with the same form body (a method override is refused by the
+      // client, contract §2). Meta's error text could quote what was sent, so
+      // only its code comes back.
       const body: Record<string, string> = { payload: JSON.stringify({ schema, data }) };
-      if (action === "remove") body.method = "DELETE";
       const what = action === "add" ? "addition" : "removal";
       const unconfirmed = (reason: string) => new Error(`Meta did not confirm the ${what} (${reason}): it may or may not have been applied.`);
+      const scope = { noRetry: true, withholdMessage: true };
       let result: unknown;
       try {
-        result = await metaApiClient.postForm<unknown>(`/${id}/users`, body, { noRetry: true, withholdMessage: true });
+        result = action === "remove"
+          ? await metaApiClient.delete<unknown>(`/${id}/users`, body, scope, { formBody: true })
+          : await metaApiClient.postForm<unknown>(`/${id}/users`, body, scope);
       } catch (err) {
         if (wasRefused(err)) throw new Error(`Meta refused the ${what} (${why(err)}).`);
         throw unconfirmed(why(err));

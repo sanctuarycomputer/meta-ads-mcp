@@ -190,14 +190,19 @@ describe("custom audience tools with Meta's official names", () => {
       for (const raw of ["Private.Person", "private.person", "3005550101", "nobody", sha("a@example.com")]) expect(text).not.toContain(raw);
     });
 
-    it("removes users with the payload in the body, never in the URL", async () => {
-      stubMeta({ ...listAudience, "POST /8001/users": () => ({ num_received: 1, num_invalid_entries: 0 }) });
+    // A real DELETE with a form body: the client refuses a method override (contract §2).
+    it("removes users with a DELETE whose payload is in a form body, never in the URL", async () => {
+      stubMeta({ ...listAudience, "DELETE /8001/users": () => ({ num_received: 1, num_invalid_entries: 0 }) });
 
       await call("ads_update_custom_audience_users", { audience_id: "8001", action: "remove", users: [{ email: "a@example.com" }] });
 
-      const i = postIndex();
-      expect(sent(i).get("method")).toBe("DELETE");
+      const i = vi.mocked(fetch).mock.calls.findIndex(([, init]) => init?.method === "DELETE");
+      const init = vi.mocked(fetch).mock.calls[i][1];
+      expect((init?.headers as Record<string, string>)["Content-Type"]).toBe("application/x-www-form-urlencoded");
+      expect(sent(i).has("method")).toBe(false);
+      expect(JSON.parse(sent(i).get("payload")!).data).toEqual([[sha("a@example.com")]]);
       expect(String(vi.mocked(fetch).mock.calls[i][0])).not.toContain(sha("a@example.com"));
+      expect(fetchCallSummary().filter((c) => c.startsWith("POST"))).toEqual([]);
     });
 
     // Measured: Meta accepts users into a website audience without complaint.
@@ -248,7 +253,7 @@ describe("custom audience tools with Meta's official names", () => {
       ["an empty object", {}],
       ["null", null],
     ])("treats an answer of %s as unconfirmed", async (_label, answer) => {
-      stubMeta({ ...listAudience, "POST /8001/users": () => mockFetchResponse(answer) });
+      stubMeta({ ...listAudience, "DELETE /8001/users": () => mockFetchResponse(answer) });
       await expect(call("ads_update_custom_audience_users", { audience_id: "8001", action: "remove", users: [{ email: "a@example.com" }] }))
         .rejects.toThrow(/may or may not/);
     });

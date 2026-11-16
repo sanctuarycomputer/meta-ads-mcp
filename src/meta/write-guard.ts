@@ -6,8 +6,20 @@
  */
 import { execFile } from "node:child_process";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 
-import { CONTRACT_VERSION, WriteRefusal, type Descriptor, type EndpointRow, type OutcomeRecord } from "./write-descriptor.js";
+import {
+  CONTRACT_VERSION,
+  WriteRefusal,
+  buildDescriptor,
+  matchEndpoint,
+  validateDescriptor,
+  type Descriptor,
+  type EndpointRow,
+  type GraphGet,
+  type OutcomeRecord,
+  type WriteRequest,
+} from "./write-descriptor.js";
 
 export type GuardRefusalClass = "unset" | "spawn" | "exit" | "output" | "version" | "denied" | "receipt" | "timeout";
 
@@ -185,4 +197,45 @@ export const callContext = new AsyncLocalStorage<CallContext>();
 
 export function newCallContext(tool: string, validateOnly: boolean): CallContext {
   return { tool, validateOnly, refusal: null, sent: [], accounts: new Set(), validateOnlyStop: false, warnings: [] };
+}
+
+/** The client's one question before a write (contract §2) and its one report after it (§9). */
+export interface WriteGate {
+  /** Resolves only on a clear allow, with the write's `request_id` and its row's validate_only label; else throws. */
+  check(req: WriteRequest, ctx: CallContext | undefined): Promise<{ requestId: string; label: EndpointRow["validate_only"] | null }>;
+  /** The outcome record for an allowed write: `null` on an ack, otherwise a one-line warning. Never throws. */
+  outcome(requestId: string, r: { ok: boolean; metaId: string | null; error: string | null }): Promise<string | null>;
+}
+
+/** The gate every real client uses: no tool context, no write; then the descriptor, its check, and the guard. */
+export class RealWriteGate implements WriteGate {
+  readonly runner: GuardRunner;
+
+  constructor(
+    private readonly get: GraphGet,
+    runner?: GuardRunner,
+  ) {
+    this.runner = runner ?? new GuardRunner();
+  }
+
+  async check(req: WriteRequest, ctx: CallContext | undefined): Promise<{ requestId: string; label: EndpointRow["validate_only"] | null }> {
+    if (!ctx) throw new WriteRefusal("no tool context");
+    const requestId = randomUUID();
+    let d: Descriptor;
+    try {
+      d = await buildDescriptor(req, { tool: ctx.tool, validateOnly: ctx.validateOnly, requestId, accounts: ctx.accounts }, this.get);
+    } catch (e) {
+      if (e instanceof WriteRefusal) throw e;
+      throw new WriteRefusal(oneLine(`the descriptor could not be built: ${e instanceof Error ? e.message : String(e)}`));
+    }
+    const problems = validateDescriptor(d);
+    if (problems.length > 0) throw new WriteRefusal(oneLine(`invalid descriptor: ${problems.join("; ")}`));
+    await this.runner.decide(d);
+    const row = matchEndpoint(d.method, d.path, d.object.type);
+    return { requestId, label: row ? row.validate_only : null };
+  }
+
+  outcome(requestId: string, r: { ok: boolean; metaId: string | null; error: string | null }): Promise<string | null> {
+    return this.runner.sendOutcome({ v: CONTRACT_VERSION, outcome_for: requestId, ok: r.ok, meta_id: r.metaId, error: r.error });
+  }
 }

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { MetaApiClient } from "../../src/meta/client.js";
+import { PASS } from "../setup-write-gate.js";
 import { setupTestToken, cleanupTestToken, mockFetchResponse, bearerTokenOf } from "../setup.js";
 import { tokenManager } from "../../src/auth/token-manager.js";
 import { hashToken, requestContext } from "../../src/auth/token-store.js";
@@ -11,7 +12,7 @@ describe("MetaApiClient", () => {
   beforeEach(() => {
     setupTestToken();
     tokenManager.resetForTests();
-    client = new MetaApiClient({
+    client = new MetaApiClient({ writeGateForTests: PASS, 
       apiVersion: "v27.0",
       baseUrl: "https://graph.facebook.com",
       timeout: 5000,
@@ -29,7 +30,7 @@ describe("MetaApiClient", () => {
   describe("constructor", () => {
     it("sends requests to Graph API v27.0 when no version is configured", async () => {
       vi.stubEnv("META_API_VERSION", undefined);
-      const defaultClient = new MetaApiClient({ maxRetries: 0 });
+      const defaultClient = new MetaApiClient({ writeGateForTests: PASS,  maxRetries: 0 });
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockFetchResponse({ data: [] })));
 
       await defaultClient.get("/me/adaccounts");
@@ -39,12 +40,12 @@ describe("MetaApiClient", () => {
     });
 
     it("refuses a configured API version that is not a plain version", () => {
-      expect(() => new MetaApiClient({ apiVersion: "v27.0/../v22.0" })).toThrow(/v27\.0/);
+      expect(() => new MetaApiClient({ writeGateForTests: PASS,  apiVersion: "v27.0/../v22.0" })).toThrow(/v27\.0/);
     });
 
     it("sends requests to the version in META_API_VERSION when it is set", async () => {
       vi.stubEnv("META_API_VERSION", "v27.0");
-      const envClient = new MetaApiClient({ maxRetries: 0 });
+      const envClient = new MetaApiClient({ writeGateForTests: PASS,  maxRetries: 0 });
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockFetchResponse({ data: [] })));
 
       await envClient.get("/me/adaccounts");
@@ -54,12 +55,12 @@ describe("MetaApiClient", () => {
     });
 
     it("refuses a configured API version other than v27.0", () => {
-      expect(() => new MetaApiClient({ apiVersion: "v21.0", maxRetries: 0 })).toThrow(/v27\.0/);
+      expect(() => new MetaApiClient({ writeGateForTests: PASS,  apiVersion: "v21.0", maxRetries: 0 })).toThrow(/v27\.0/);
     });
 
     it("refuses a META_API_VERSION other than v27.0", () => {
       vi.stubEnv("META_API_VERSION", "v26.0");
-      expect(() => new MetaApiClient({ maxRetries: 0 })).toThrow(/v27\.0/);
+      expect(() => new MetaApiClient({ writeGateForTests: PASS,  maxRetries: 0 })).toThrow(/v27\.0/);
     });
   });
 
@@ -318,7 +319,7 @@ describe("MetaApiClient", () => {
 
   describe("calls sent once (noRetry)", () => {
     it("sends the call once, even on a transient error", async () => {
-      const retryClient = new MetaApiClient({ maxRetries: 3, timeout: 5000 });
+      const retryClient = new MetaApiClient({ writeGateForTests: PASS,  maxRetries: 3, timeout: 5000 });
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockFetchResponse({ error: { message: "Server error", type: "API_ERROR", code: 1 } })));
 
       await expect(retryClient.postForm("/8001/users", { payload: "{}" }, { noRetry: true })).rejects.toThrow();
@@ -443,7 +444,7 @@ describe("MetaApiClient", () => {
 
   describe("bounded calls (timeoutMs)", () => {
     it("never retries a bounded call, even on a transient error", async () => {
-      const retryClient = new MetaApiClient({ maxRetries: 3, timeout: 5000 });
+      const retryClient = new MetaApiClient({ writeGateForTests: PASS,  maxRetries: 3, timeout: 5000 });
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockFetchResponse({ error: { message: "Server error", type: "API_ERROR", code: 1 } })));
 
       await expect(retryClient.postForm("/123", { status: "PAUSED" }, { accountId: "act_1", timeoutMs: 1000 })).rejects.toThrow();
@@ -487,7 +488,7 @@ describe("MetaApiClient", () => {
 
   describe("retry behavior", () => {
     it("retries on server errors when retries are configured", async () => {
-      const retryClient = new MetaApiClient({
+      const retryClient = new MetaApiClient({ writeGateForTests: PASS, 
         maxRetries: 1,
         timeout: 5000,
       });
@@ -516,7 +517,7 @@ describe("MetaApiClient", () => {
     });
 
     it("does NOT retry on rate-limit errors (per Meta's 'stop calling' rule)", async () => {
-      const retryClient = new MetaApiClient({
+      const retryClient = new MetaApiClient({ writeGateForTests: PASS, 
         maxRetries: 3,
         timeout: 5000,
       });
@@ -537,7 +538,7 @@ describe("MetaApiClient", () => {
     });
 
     it("opens a circuit immediately on abuse signal (subcode 1996)", async () => {
-      const retryClient = new MetaApiClient({
+      const retryClient = new MetaApiClient({ writeGateForTests: PASS, 
         maxRetries: 0,
         timeout: 5000,
       });
@@ -561,7 +562,7 @@ describe("MetaApiClient", () => {
     });
 
     it("does not open a circuit across different ad accounts on a per-account throttle", async () => {
-      const retryClient = new MetaApiClient({
+      const retryClient = new MetaApiClient({ writeGateForTests: PASS, 
         maxRetries: 0,
         timeout: 5000,
       });
@@ -590,7 +591,7 @@ describe("MetaApiClient", () => {
     });
 
     it("does NOT retry POST to account-scoped collection paths on 5xx (idempotency safety)", async () => {
-      const retryClient = new MetaApiClient({
+      const retryClient = new MetaApiClient({ writeGateForTests: PASS, 
         maxRetries: 3,
         timeout: 5000,
       });
@@ -615,7 +616,7 @@ describe("MetaApiClient", () => {
     });
 
     it("does NOT retry POST to a /copies edge on 5xx (duplicate-mint safety)", async () => {
-      const retryClient = new MetaApiClient({
+      const retryClient = new MetaApiClient({ writeGateForTests: PASS, 
         maxRetries: 3,
         timeout: 5000,
       });
@@ -647,7 +648,7 @@ describe("MetaApiClient", () => {
       "/333/message_qrdls",
       "/333/request_code",
     ])("does NOT retry POST to WhatsApp creating edge %s on 5xx", async (path) => {
-      const retryClient = new MetaApiClient({
+      const retryClient = new MetaApiClient({ writeGateForTests: PASS, 
         maxRetries: 3,
         timeout: 5000,
       });
@@ -666,7 +667,7 @@ describe("MetaApiClient", () => {
     });
 
     it("does NOT retry POST to a Page's lead forms on a transient error (duplicate-mint safety)", async () => {
-      const retryClient = new MetaApiClient({ maxRetries: 3, timeout: 5000 });
+      const retryClient = new MetaApiClient({ writeGateForTests: PASS,  maxRetries: 3, timeout: 5000 });
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockFetchResponse({
         error: { message: "An unknown error has occurred.", type: "OAuthException", code: 1 },
       })));
@@ -677,7 +678,7 @@ describe("MetaApiClient", () => {
     });
 
     it("does NOT retry POST to a Business Manager's ad studies on a transient error (duplicate-mint safety)", async () => {
-      const retryClient = new MetaApiClient({ maxRetries: 3, timeout: 5000 });
+      const retryClient = new MetaApiClient({ writeGateForTests: PASS,  maxRetries: 3, timeout: 5000 });
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockFetchResponse({
         error: { message: "An unknown error has occurred.", type: "OAuthException", code: 1 },
       })));
@@ -688,7 +689,7 @@ describe("MetaApiClient", () => {
     });
 
     it("uses caller-provided account scope for /copies write pacing", async () => {
-      const scopedClient = new MetaApiClient({
+      const scopedClient = new MetaApiClient({ writeGateForTests: PASS, 
         maxRetries: 0,
         timeout: 5000,
       });
@@ -707,7 +708,7 @@ describe("MetaApiClient", () => {
     });
 
     it("still retries POST to non-account-scoped paths (updates are idempotent)", async () => {
-      const retryClient = new MetaApiClient({
+      const retryClient = new MetaApiClient({ writeGateForTests: PASS, 
         maxRetries: 1,
         timeout: 5000,
       });
@@ -737,7 +738,7 @@ describe("MetaApiClient", () => {
     });
 
     it("does not retry auth errors", async () => {
-      const retryClient = new MetaApiClient({
+      const retryClient = new MetaApiClient({ writeGateForTests: PASS, 
         maxRetries: 2,
         timeout: 5000,
       });

@@ -14,6 +14,8 @@ import type { MetaApiError, MetaApiResponse } from "./types/common.js";
 import { collectAllPages } from "./paginator.js";
 import { assertMetaApiVersion, resolveMetaApiVersion } from "./api-version.js";
 import { scrubCredentialsDeep, scrubErrorCredentials } from "../utils/scrub-credentials.js";
+import { ENDPOINTS, WriteRefusal, type GraphGet } from "./write-descriptor.js";
+import { RealWriteGate, callContext, type CallContext, type WriteGate } from "./write-guard.js";
 
 // An error answer can quote the request, its token included (a Page token
 // while a Page action runs). It is cleaned before anything classifies, logs
@@ -32,7 +34,152 @@ export interface MetaApiClientConfig {
   baseUrl?: string;
   timeout?: number;
   maxRetries?: number;
+  /**
+   * TEST-ONLY. Builds the write gate in place of the real one (RealWriteGate around this client's own reads),
+   * so a test can give it its own guard runner, or pass every write. Never passed under src/: a test asserts it.
+   */
+  writeGateForTests?: (get: GraphGet) => WriteGate;
 }
+
+// ─── Client refusals (contract docs/contracts/meta-ads-guard.md §2) ─────────
+
+// The joined path, `/<version><path>`: letters, digits and _ between single slashes, nothing else.
+const PLAIN_PATH = /^\/(v\d+\.\d+\/)?[A-Za-z0-9_]+(\/[A-Za-z0-9_]+)*$/;
+const OVERRIDE_NAMES: ReadonlySet<string> = new Set(["method", "_method"]);
+const BATCH_NAMES: ReadonlySet<string> = new Set(["batch", "async_batch"]);
+const READ_POST = new RegExp(ENDPOINTS.read_post);
+
+const isReadServer = (): boolean => process.env.META_ADS_READ_ONLY === "1";
+
+/**
+ * Refuses, with `WriteRefusal`, a request the client never sends on either server (contract §2): a method
+ * override or a Graph batch parameter (any case), a repeated multipart name, an `async_batch_requests` segment, a
+ * joined path (`/<version><path>`, checked raw, before `new URL` folds it) that is not plain, a base URL that is not
+ * https on a listed host with no port or userinfo; and on the read server (`META_ADS_READ_ONLY=1`) any method but
+ * GET, except an insights report POST (`ENDPOINTS.read_post`). Nothing it says quotes the path or a value.
+ */
+export function checkRequestShape(
+  method: string,
+  baseUrl: string,
+  joined: string,
+  params: Readonly<Record<string, unknown>>,
+  multipartNames?: readonly string[],
+): void {
+  for (const key of Object.keys(params)) {
+    const k = key.toLowerCase();
+    if (OVERRIDE_NAMES.has(k)) throw new WriteRefusal(`a parameter named ${key} would override the HTTP method`);
+    if (BATCH_NAMES.has(k)) throw new WriteRefusal(`a parameter named ${key} is a Graph batch`);
+  }
+  if (multipartNames) {
+    const seen = new Set<string>();
+    for (const name of multipartNames) {
+      if (seen.has(name)) throw new WriteRefusal(`the multipart field ${JSON.stringify(name.slice(0, 60))} is repeated`);
+      seen.add(name);
+    }
+  }
+  if (joined.split(/[/?#]/).some((seg) => seg.toLowerCase() === "async_batch_requests")) {
+    throw new WriteRefusal("the path has an async_batch_requests segment (a Graph batch)");
+  }
+  if (!PLAIN_PATH.test(joined)) {
+    throw new WriteRefusal("the path is not a plain Graph path (letters, digits and _ between single slashes)");
+  }
+  let base: URL;
+  try {
+    base = new URL(baseUrl);
+  } catch {
+    throw new WriteRefusal("the base URL is not a URL");
+  }
+  if (base.protocol !== "https:") throw new WriteRefusal("the base URL is not https");
+  if (!ENDPOINTS.host_list.includes(base.hostname)) throw new WriteRefusal(`the host ${base.hostname} is not on the host list`);
+  if (base.port !== "") throw new WriteRefusal("the base URL has a port");
+  if (base.username !== "" || base.password !== "") throw new WriteRefusal("the base URL has userinfo");
+  if ((base.pathname !== "/" && base.pathname !== "") || base.search !== "" || base.hash !== "") {
+    throw new WriteRefusal("the base URL has a path, query or fragment");
+  }
+  if (isReadServer() && method !== "GET" && !(method === "POST" && READ_POST.test(joined))) {
+    const path = joined.replace(/^\/v\d+\.\d+/, "");
+    throw new WriteRefusal(`this server is read-only: ${method} ${path} is neither a GET nor an insights report`);
+  }
+}
+
+// ─── Decoded params: one source for the descriptor and the wire (P8) ────────
+
+// Form strings that hold JSON objects the descriptor reads: decoded when they start with { or [.
+const JSON_FORM_KEYS: ReadonlySet<string> = new Set(["creative", "cells", "objectives", ...Object.keys(ENDPOINTS.sub_keys)]);
+/** The placeholder a multipart file stands as in decoded params. */
+export const MULTIPART_FILE = "<file>";
+
+function hasUnsafeNumber(v: unknown): boolean {
+  if (typeof v === "number") return Number.isInteger(v) && !Number.isSafeInteger(v);
+  if (Array.isArray(v)) return v.some(hasUnsafeNumber);
+  if (v !== null && typeof v === "object") return Object.values(v).some(hasUnsafeNumber);
+  return false;
+}
+
+function decodeFormValue(key: string, value: unknown): unknown {
+  if (typeof value !== "string" || !JSON_FORM_KEYS.has(key)) return value;
+  const text = value.trimStart();
+  if (!text.startsWith("{") && !text.startsWith("[")) return value;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new WriteRefusal(`${key} is not valid JSON`);
+  }
+  // A number past 2^53 has already lost digits: re-sent, it would name another object.
+  if (hasUnsafeNumber(parsed)) throw new WriteRefusal(`${key} holds a number too large to send exactly (send ids as strings)`);
+  return parsed;
+}
+
+/** A form's params, decoded (contract §3 reads objects, not form strings); `access_token` and unset values dropped. */
+export function decodeForm(params: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || isAccessTokenName(key)) continue;
+    out[key] = decodeFormValue(key, value);
+  }
+  return out;
+}
+
+/** One form value as sent: a string as it is, an object or array as JSON, anything else as its string. */
+function encodeValue(value: unknown): string {
+  return typeof value === "string" ? value : value !== null && typeof value === "object" ? JSON.stringify(value) : String(value);
+}
+
+/** Decoded params as an `application/x-www-form-urlencoded` body. */
+export function encodeForm(params: Readonly<Record<string, unknown>>): URLSearchParams {
+  const form = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && !isAccessTokenName(key)) form.set(key, encodeValue(value));
+  }
+  return form;
+}
+
+// The first refusal of each call, rethrown as it was to every later write of the call.
+const firstRefusal = new WeakMap<CallContext, WriteRefusal>();
+
+// A refusal is the call's refusal: the first one is kept on the context (contract §10: the tool returns the reason).
+function noted<E>(ctx: CallContext | undefined, e: E): E {
+  if (ctx && e instanceof WriteRefusal && ctx.refusal === null) {
+    ctx.refusal = e.message;
+    firstRefusal.set(ctx, e);
+  }
+  return e;
+}
+
+// Decoding a write's params can refuse it (unreadable JSON): that refusal is the call's too.
+function decodedIn(decode: () => Record<string, unknown>): Record<string, unknown> {
+  try {
+    return decode();
+  } catch (e) {
+    throw noted(callContext.getStore(), e);
+  }
+}
+
+const VALIDATE_ONLY = ["validate_only"];
+const VALIDATE_ONLY_FORM = JSON.stringify(VALIDATE_ONLY);
+
+type Encoded = { url: string; init?: RequestInit };
 
 interface RequestScope {
   accountId?: string;
@@ -160,12 +307,16 @@ export class MetaApiClient {
   private readonly writePacer = new WritePacer();
   private lastUsageLogAt = 0;
   private lastVersionWarningAt = 0;
+  private readonly writeGate: WriteGate;
 
   constructor(config?: MetaApiClientConfig) {
     this.apiVersion = assertMetaApiVersion(config?.apiVersion ?? resolveMetaApiVersion());
     this.baseUrl = config?.baseUrl ?? DEFAULT_BASE_URL;
     this.timeout = config?.timeout ?? DEFAULT_TIMEOUT;
     this.maxRetries = config?.maxRetries ?? MAX_RETRIES;
+    // The descriptor's reads go through this client's own GET: signed, limited and shape-checked like any other.
+    const get: GraphGet = <T>(path: string, params: Record<string, string | number>) => this.get<T>(path, params);
+    this.writeGate = config?.writeGateForTests ? config.writeGateForTests(get) : new RealWriteGate(get);
     // A server given its token must also be given the secret to sign with,
     // or it doesn't start. Only the env is read here: asking the token store
     // would load the token registry as a side effect of construction.
@@ -178,21 +329,24 @@ export class MetaApiClient {
     scope?: RequestScope,
   ): Promise<T> {
     const url = this.buildUrl(path, params);
-    return this.execute<T>("GET", url, path, undefined, scope);
+    return this.execute<T>("GET", url, path, params ?? {}, undefined, scope);
   }
 
   async post<T>(
     path: string,
     body?: Record<string, unknown>,
   ): Promise<T> {
-    const url = this.buildUrl(path);
-    const sent = body === undefined
-      ? undefined
+    const decoded = body === undefined
+      ? {}
       : Object.fromEntries(Object.entries(body).filter(([key]) => !isAccessTokenName(key)));
-    return this.execute<T>("POST", url, path, {
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(sent),
-    });
+    return this.sendWrite<T>("POST", path, decoded, VALIDATE_ONLY, (p) => ({
+      url: this.buildUrl(path),
+      init: {
+        headers: { "Content-Type": "application/json" },
+        // No body and nothing added: sent as before, with no body at all.
+        body: body === undefined && Object.keys(p).length === 0 ? undefined : JSON.stringify(p),
+      },
+    }));
   }
 
   async postForm<T>(
@@ -200,36 +354,58 @@ export class MetaApiClient {
     params: Record<string, string | number | boolean>,
     scope?: RequestScope,
   ): Promise<T> {
-    const url = this.buildUrl(path);
-    const formBody = new URLSearchParams();
-    for (const [key, value] of Object.entries(params)) {
-      if (!isAccessTokenName(key)) formBody.set(key, String(value));
-    }
-    return this.execute<T>("POST", url, path, {
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: formBody.toString(),
-    }, scope);
+    return this.sendWrite<T>("POST", path, decodedIn(() => decodeForm(params)), VALIDATE_ONLY_FORM, (p) => ({
+      url: this.buildUrl(path),
+      init: {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: encodeForm(p).toString(),
+      },
+    }), scope);
   }
 
   async postMultipart<T>(
     path: string,
     formData: FormData,
   ): Promise<T> {
-    const url = this.buildUrl(path);
     // The token travels only in the header.
     for (const name of [...new Set(formData.keys())]) {
       if (isAccessTokenName(name)) formData.delete(name);
     }
-    return this.execute<T>("POST", url, path, { body: formData });
+    const names = [...formData.keys()];
+    const decoded = decodedIn(() => {
+      const out: Record<string, unknown> = {};
+      for (const [name, value] of formData.entries()) {
+        out[name] = typeof value === "string" ? decodeFormValue(name, value) : MULTIPART_FILE;
+      }
+      return out;
+    });
+    return this.sendWrite<T>("POST", path, decoded, VALIDATE_ONLY_FORM, (p) => {
+      // The caller's form goes as it is; only execution_options is added to it.
+      if (p.execution_options !== undefined && !formData.has("execution_options")) {
+        formData.append("execution_options", encodeValue(p.execution_options));
+      }
+      return { url: this.buildUrl(path), init: { body: formData } };
+    }, undefined, names);
   }
 
+  /**
+   * A DELETE. Its params go in the query, or with `formBody` in an `application/x-www-form-urlencoded` body (for
+   * values that must never be in a URL).
+   */
   async delete<T>(
     path: string,
     params?: Record<string, string | number | boolean | undefined>,
     scope?: RequestScope,
+    opts?: { formBody?: boolean },
   ): Promise<T> {
-    const url = this.buildUrl(path, params);
-    return this.execute<T>("DELETE", url, path, undefined, scope);
+    return this.sendWrite<T>("DELETE", path, decodedIn(() => decodeForm(params ?? {})), VALIDATE_ONLY_FORM, (p) =>
+      opts?.formBody
+        ? {
+          url: this.buildUrl(path),
+          init: { headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: encodeForm(p).toString() },
+        }
+        : { url: this.buildUrl(path, Object.fromEntries(Object.entries(p).map(([k, v]) => [k, encodeValue(v)]))) },
+    scope);
   }
 
   async getPaginated<T>(
@@ -266,6 +442,8 @@ export class MetaApiClient {
     signal: AbortSignal,
     token: string,
   ): Promise<T | undefined> {
+    // A request it must never send is refused, not quietly dropped.
+    checkRequestShape("GET", this.baseUrl, this.joined(path), params);
     const tokenHash = hashToken(token);
     const accountId = extractAccountId(path);
     if (this.circuitBreaker.isOpen({ tokenHash, accountId, type: guessBucType("GET", path) })) return undefined;
@@ -320,6 +498,88 @@ export class MetaApiClient {
 
   // ─── Internal ────────────────────────────────────────────────
 
+  /** The raw `/<version><path>` the URL is built from, before `new URL` normalises it. */
+  private joined(path: string): string {
+    return `/${this.apiVersion}${path.startsWith("/") ? path : `/${path}`}`;
+  }
+
+  /**
+   * The one way a write reaches Meta (contract §2, §9). `decoded` is the write's params as the descriptor reads
+   * them and `encode` turns them into the request, so what the guard is asked about is what is sent. In order: the
+   * shape check; on the read server an insights report goes straight out (its only allowed write); a refused or
+   * stopped call refuses; `execution_options` is the server's to add (under validate_only); the gate decides;
+   * the request is sent; the outcome is recorded once. Every refusal but the validate-only stop is the call's.
+   */
+  private async sendWrite<T>(
+    method: "POST" | "DELETE",
+    path: string,
+    decoded: Record<string, unknown>,
+    validateOnlyValue: unknown,
+    encode: (params: Record<string, unknown>) => Encoded,
+    scope?: RequestScope,
+    multipartNames?: readonly string[],
+  ): Promise<T> {
+    const ctx = callContext.getStore();
+    try {
+      checkRequestShape(method, this.baseUrl, this.joined(path), decoded, multipartNames);
+    } catch (e) {
+      throw noted(ctx, e);
+    }
+    if (isReadServer()) {
+      // Only an insights report POST passes the shape check here, and the read server never runs the guard.
+      const { url, init } = encode(decoded);
+      return this.execute<T>(method, url, path, decoded, init, scope);
+    }
+
+    if (ctx && ctx.refusal !== null) throw firstRefusal.get(ctx) ?? new WriteRefusal("an earlier write in this call was refused");
+    if (ctx?.validateOnlyStop) {
+      throw new WriteRefusal("validate_only: later steps need the first write's result and were not sent");
+    }
+
+    const reqPath = path.startsWith("/") ? path : `/${path}`;
+    let params: Record<string, unknown>;
+    let gate: { requestId: string; label: SentWriteLabel };
+    let encoded: Encoded;
+    try {
+      if (Object.keys(decoded).some((k) => k.toLowerCase() === "execution_options")) {
+        throw new WriteRefusal("execution_options is set by the server for validate_only, never by the caller");
+      }
+      params = ctx?.validateOnly ? { ...decoded, execution_options: validateOnlyValue } : decoded;
+      gate = await this.writeGate.check({ method, path: reqPath, params }, ctx);
+      encoded = encode(params);
+    } catch (e) {
+      throw noted(ctx, e);
+    }
+
+    let result: T;
+    try {
+      result = await this.execute<T>(method, encoded.url, path, params, encoded.init, scope);
+    } catch (e) {
+      const error = scrubbedMessage(e);
+      if (!(e instanceof WriteRefusal)) ctx?.sent.push({ method, path: reqPath, label: gate.label, ok: false, answer: error });
+      await this.recordOutcome(ctx, gate.requestId, { ok: false, metaId: null, error });
+      throw noted(ctx, e);
+    } finally {
+      if (ctx?.validateOnly) ctx.validateOnlyStop = true;
+    }
+    const answer = result as unknown;
+    const metaId = answer !== null && typeof answer === "object" && typeof (answer as { id?: unknown }).id === "string"
+      ? (answer as { id: string }).id
+      : null;
+    ctx?.sent.push({ method, path: reqPath, label: gate.label, ok: true, answer: scrubbedText(JSON.stringify(answer) ?? "") });
+    await this.recordOutcome(ctx, gate.requestId, { ok: true, metaId, error: null });
+    return result;
+  }
+
+  private async recordOutcome(
+    ctx: CallContext | undefined,
+    requestId: string,
+    r: { ok: boolean; metaId: string | null; error: string | null },
+  ): Promise<void> {
+    const warning = await this.writeGate.outcome(requestId, r);
+    if (warning !== null) ctx?.warnings.push(warning);
+  }
+
   private buildUrl(
     path: string,
     params?: Record<string, string | number | boolean | undefined>,
@@ -342,14 +602,29 @@ export class MetaApiClient {
     method: string,
     url: string,
     path: string,
+    params: Readonly<Record<string, unknown>>,
     options?: RequestInit,
     scope?: RequestScope,
   ): Promise<T> {
+    const ctx = callContext.getStore();
+    const multipartNames = options?.body instanceof FormData ? [...options.body.keys()] : undefined;
+    try {
+      checkRequestShape(method, this.baseUrl, this.joined(path), params, multipartNames);
+    } catch (e) {
+      throw noted(ctx, e);
+    }
     const token = getAccessToken();
     // Signed before anything else: without the secret nothing is sent, and
     // no pacing or limiter state changes.
     const signedUrl = new URL(url);
     const auth = signGraphRequest(signedUrl, token);
+    // The URL carries only what the request named, and the proof.
+    const named = new Set([...Object.keys(params), "appsecret_proof"]);
+    if ([...signedUrl.searchParams.keys()].some((k) => !named.has(k))) {
+      throw noted(ctx, new WriteRefusal("the URL carries a query parameter the request did not name"));
+    }
+    const pathAccount = extractAccountId(path);
+    if (ctx && pathAccount?.startsWith("act_")) ctx.accounts.add(pathAccount);
     const reqUrl = signedUrl.toString();
     const tokenHash = hashToken(token);
     const accountId = scope?.accountId ?? extractAccountId(path);
@@ -637,6 +912,23 @@ export class MetaApiClient {
       );
     }
   }
+}
+
+type SentWriteLabel = CallContext["sent"][number]["label"];
+
+// A message for the outcome record and the call's list of writes: one line, no credential, no token.
+function scrubbedText(text: string): string {
+  let token: string | undefined;
+  try {
+    token = getAccessToken();
+  } catch {
+    token = undefined;
+  }
+  return scrubCredentialsDeep(text, token).replace(/\s+/g, " ").trim();
+}
+
+function scrubbedMessage(e: unknown): string {
+  return scrubbedText(e instanceof Error ? e.message : String(e));
 }
 
 /**
