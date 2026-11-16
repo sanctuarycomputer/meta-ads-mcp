@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { MetaApiClient, metaApiClient } from "../../src/meta/client.js";
+import { MetaApiClient, metaApiClient, notSentOf } from "../../src/meta/client.js";
 import { withPageToken } from "../../src/meta/page-token.js";
 import * as wd from "../../src/meta/write-descriptor.js";
 import { matchEndpoint, type Descriptor } from "../../src/meta/write-descriptor.js";
@@ -652,7 +652,8 @@ describe("deciding cases", () => {
     expect(ctx.sent[0].answer).toContain("[REDACTED]");
   });
 
-  it("scrubs the token and the proof from a thrown error in the outcome and ctx.sent", async () => {
+  // The mocked execute throws before any fetch: the write is not sent (task 5, M11), so its error is in notSentOf.
+  it("scrubs the token and the proof from a thrown error in the outcome and the not-sent list", async () => {
     const token = "test-access-token";
     const proof = createHmac("sha256", TEST_APP_SECRET).update(token).digest("hex");
     type Exec = (this: MetaApiClient, m: string, ...rest: unknown[]) => Promise<unknown>;
@@ -667,7 +668,8 @@ describe("deciding cases", () => {
     await refusalOf(run);
     const [o] = outcomes();
     expect(o.ok).toBe(false);
-    for (const text of [String(o.error), ctx.sent[0].answer]) {
+    expect(ctx.sent).toEqual([]);
+    for (const text of [String(o.error), notSentOf(ctx)[0].error]) {
       expect(text).toBe("boom [REDACTED] [REDACTED]");
     }
   });

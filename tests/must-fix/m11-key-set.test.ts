@@ -183,6 +183,7 @@ describe("keySetMiss", () => {
     ["keys from two of the row's lists (the union)", d("POST", `/${CAMP}`, "campaign", ["name", "status"])],
     ["execution_options on a row with an empty set", d("POST", `/${CAMP}/budget_schedules`, "other", ["execution_options"])],
     ["a no-row write with no keys", d("POST", `/${CAMP}/no_such_edge`, "other", [])],
+    ["a no-row write whose only key is execution_options (T4-1)", d("POST", `/${CAMP}/no_such_edge`, "other", ["execution_options"])],
   ])("passes %s", (_name, desc) => {
     expect(keySetMiss(desc)).toBeNull();
   });
@@ -192,6 +193,7 @@ describe("keySetMiss", () => {
     ["a dotted key whose listed prefix is not bounded", d("POST", `/${ACT}/ads`, "ad", ["name", "creative.name.x"]), "creative.name.x", "POST /act_{id}/ads"],
     ["a key of another row", d("POST", `/${CAMP}`, "campaign", ["name", "targeting"]), "targeting", "POST /{campaign_id}"],
     ["a no-row write with a key", d("POST", `/${CAMP}/no_such_edge`, "other", ["name"]), "name", "no row"],
+    ["two out-of-set keys: the first is named (T4-2)", d("POST", `/${CAMP}`, "campaign", ["name", "targeting", "bid_amount"]), "targeting", "POST /{campaign_id}"],
   ])("misses %s", (_name, desc, key, row) => {
     expect(keySetMiss(desc)).toEqual({ key, row });
   });

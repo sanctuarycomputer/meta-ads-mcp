@@ -53,7 +53,7 @@ const isReadServer = (): boolean => process.env.META_ADS_READ_ONLY === "1";
 
 /**
  * Refuses, with `WriteRefusal`, a request the client never sends on either server (contract §2): a method
- * override or a Graph batch parameter (any case), a repeated multipart name, an `async_batch_requests` segment, a
+ * override or a Graph batch parameter (its name before the first `[`, in any case: `method[0]`, `batch[0][method]`), a repeated multipart name, an `async_batch_requests` segment, a
  * joined path (`/<version><path>`, checked raw, before `new URL` folds it) that is not plain, a base URL that is not
  * https on a listed host with no port or userinfo, or that is not exactly `https://<host>` (what is checked is
  * what the URL is built from), or whose host takes only other requests (`hostAllowed`, contract 1.1 §2: the video
@@ -70,7 +70,8 @@ export function checkRequestShape(
 ): void {
   for (const key of [...Object.keys(params), ...(multipartNames ?? [])]) {
     assertFieldName(key);
-    const k = key.toLowerCase();
+    // Graph reads `method[0]` or `batch[0][method]` as the field before the bracket.
+    const k = key.split("[")[0].toLowerCase();
     if (OVERRIDE_NAMES.has(k)) throw new WriteRefusal(`a parameter named ${key} would override the HTTP method`);
     if (BATCH_NAMES.has(k)) throw new WriteRefusal(`a parameter named ${key} is a Graph batch`);
   }
@@ -208,6 +209,42 @@ function noted<E>(ctx: CallContext | undefined, e: E): E {
 const heldCalls = new WeakSet<CallContext>();
 const closedCalls = new WeakSet<CallContext>();
 
+/** A write the guard allowed and the client never sent (it never reached `fetch`), and why. */
+export interface NotSentWrite {
+  method: string;
+  path: string;
+  error: string;
+}
+
+/** What became of a write past the gate (see `lastWriteFate`). */
+export type WriteFate = "ok" | "failed" | "unknown" | "not-sent";
+
+// Per call: the writes allowed and never sent (spec check 3, "not sent is not sent"), and the latest write's fate.
+const notSentCalls = new WeakMap<CallContext, NotSentWrite[]>();
+const writeFates = new WeakMap<CallContext, WriteFate>();
+
+/** The call's writes that the guard allowed and the client never sent, in order. Never in `ctx.sent`. */
+export function notSentOf(ctx: CallContext): readonly NotSentWrite[] {
+  return notSentCalls.get(ctx) ?? [];
+}
+
+/**
+ * The fate of the call's most recent write past the gate: `not-sent` when it never reached `fetch`; `failed` when
+ * the last answer was a 4xx; `unknown` when it reached `fetch` and threw with no answer (timeout, abort, transport
+ * error), after a 5xx, or after any other answer it could not use (a 2xx whose body would not read); `ok` on
+ * success; `null` when no write of the call got past the gate (a refusal from the shape check or the gate shows as
+ * the call's refusal instead).
+ */
+export function lastWriteFate(ctx: CallContext): WriteFate | null {
+  return writeFates.get(ctx) ?? null;
+}
+
+/** What `execute` tells its caller about the wire: whether `fetch` was reached, and the last answer's HTTP status. */
+interface Wire {
+  fetched: boolean;
+  status: number | null;
+}
+
 /** Whether the validate-only stop refused a write of this call (the write was held back, not sent). */
 export function validateOnlyHeld(ctx: CallContext): boolean {
   return heldCalls.has(ctx);
@@ -232,7 +269,7 @@ const VALIDATE_ONLY_FORM = JSON.stringify(VALIDATE_ONLY);
 
 type Encoded = { url: string; init?: RequestInit };
 
-interface RequestScope {
+export interface RequestScope {
   accountId?: string;
   // A call with a hard end, for work that has to fit a deadline: it is never
   // retried, it is not sent at all if pacing would hold it past this many
@@ -386,11 +423,19 @@ export class MetaApiClient {
   async post<T>(
     path: string,
     body?: Record<string, unknown>,
+    scope?: RequestScope,
   ): Promise<T> {
     const decoded = decodedIn(() => {
-      const out = body === undefined
+      // One deep copy, taken once: it is what the descriptor reads and what is sent, whatever the caller does after.
+      let copy: Record<string, unknown> | undefined;
+      try {
+        copy = structuredClone(body);
+      } catch {
+        throw new WriteRefusal("the body cannot be copied: it holds a value that is not plain data");
+      }
+      const out = copy === undefined
         ? {}
-        : Object.fromEntries(Object.entries(body).filter(([key]) => !isAccessTokenName(key)));
+        : Object.fromEntries(Object.entries(copy).filter(([key]) => !isAccessTokenName(key)));
       for (const [key, value] of Object.entries(out)) {
         assertFieldName(key);
         assertSendable(key, value);
@@ -404,7 +449,7 @@ export class MetaApiClient {
         // No body and nothing added: sent as before, with no body at all.
         body: body === undefined && Object.keys(p).length === 0 ? undefined : JSON.stringify(p),
       },
-    }));
+    }), scope);
   }
 
   async postForm<T>(
@@ -424,27 +469,31 @@ export class MetaApiClient {
   async postMultipart<T>(
     path: string,
     formData: FormData,
+    scope?: RequestScope,
   ): Promise<T> {
-    // The token travels only in the header.
-    for (const name of [...new Set(formData.keys())]) {
-      if (isAccessTokenName(name)) formData.delete(name);
-    }
-    const names = [...formData.keys()];
+    // The caller's entries, taken once before anything else; the caller's form is never read again or sent. The token
+    // travels only in the header.
+    const snapshot = [...formData.entries()].filter(([name]) => !isAccessTokenName(name));
+    const names = snapshot.map(([name]) => name);
     const decoded = decodedIn(() => {
       const out: Record<string, unknown> = {};
-      for (const [name, value] of formData.entries()) {
+      for (const [name, value] of snapshot) {
         assertFieldName(name);
         out[name] = typeof value === "string" ? decodeFormValue(name, value) : MULTIPART_FILE;
       }
       return out;
     });
     return this.sendWrite<T>("POST", path, decoded, VALIDATE_ONLY_FORM, (p) => {
-      // The caller's form goes as it is; only execution_options is added to it.
-      if (p.execution_options !== undefined && !formData.has("execution_options")) {
-        formData.append("execution_options", encodeValue(p.execution_options));
+      // A new form of the snapshot's entries: each string re-encoded from what the descriptor read, each file the
+      // snapshot's own object (the snapshot decides which is which, never the decoded text).
+      const sent = new FormData();
+      for (const [name, value] of snapshot) {
+        if (typeof value === "string") sent.append(name, encodeValue(p[name]));
+        else sent.append(name, value);
       }
-      return { url: this.buildUrl("POST", path), init: { body: formData } };
-    }, undefined, names);
+      if (p.execution_options !== undefined) sent.append("execution_options", encodeValue(p.execution_options));
+      return { url: this.buildUrl("POST", path), init: { body: sent } };
+    }, scope, names);
   }
 
   /**
@@ -617,11 +666,23 @@ export class MetaApiClient {
     }
 
     let result: T;
+    const wire: Wire = { fetched: false, status: null };
     try {
-      result = await this.execute<T>(method, encoded.url, path, params, encoded.init, scope);
+      result = await this.execute<T>(method, encoded.url, path, params, encoded.init, scope, wire);
     } catch (e) {
       const error = scrubbedMessage(e);
-      if (!(e instanceof WriteRefusal)) ctx?.sent.push({ method, path: reqPath, label: gate.label, ok: false, answer: error });
+      if (!wire.fetched) {
+        // Never reached fetch: Meta never saw it. Not a write sent, whatever the reason.
+        if (ctx) {
+          const list = notSentCalls.get(ctx) ?? [];
+          list.push({ method, path: reqPath, error });
+          notSentCalls.set(ctx, list);
+          writeFates.set(ctx, "not-sent");
+        }
+      } else {
+        ctx?.sent.push({ method, path: reqPath, label: gate.label, ok: false, answer: error });
+        if (ctx) writeFates.set(ctx, wire.status !== null && wire.status >= 400 && wire.status < 500 ? "failed" : "unknown");
+      }
       await this.recordOutcome(ctx, gate.requestId, { ok: false, metaId: null, error });
       throw noted(ctx, e);
     } finally {
@@ -631,6 +692,7 @@ export class MetaApiClient {
     const metaId = answer !== null && typeof answer === "object" && typeof (answer as { id?: unknown }).id === "string"
       ? (answer as { id: string }).id
       : null;
+    if (ctx) writeFates.set(ctx, "ok");
     ctx?.sent.push({ method, path: reqPath, label: gate.label, ok: true, answer: scrubbedAnswer(answer) });
     await this.recordOutcome(ctx, gate.requestId, { ok: true, metaId, error: null });
     return result;
@@ -683,6 +745,7 @@ export class MetaApiClient {
     params: Readonly<Record<string, unknown>>,
     options?: RequestInit,
     scope?: RequestScope,
+    wire?: Wire,
   ): Promise<T> {
     const ctx = callContext.getStore();
     const multipartNames = options?.body instanceof FormData ? [...options.body.keys()] : undefined;
@@ -745,13 +808,17 @@ export class MetaApiClient {
     // duplicates on retry. A Page's /leadgen_forms creates a lead form the
     // same way, /photos a Page photo, and a form's /test_leads a test lead
     // (one per form: a retry after a lost answer is refused as a second one).
+    // An object's /budget_schedules creates a budget schedule, and a POST to an
+    // object's /insights an async report run: both mint one per request.
     // Other POSTs (updates on /<id>) and DELETEs are idempotent at the API
     // level.
     const isCreatingRequest =
       method === "POST" &&
       (/^\/?act_[A-Za-z0-9]+\//.test(path) ||
         /\/copies$/.test(path) ||
-        /\/(message_templates|flows|message_qrdls|request_code|leadgen_forms|photos|test_leads|ad_studies)$/.test(path));
+        /\/(message_templates|flows|message_qrdls|request_code|leadgen_forms|photos|test_leads|ad_studies)$/.test(path) ||
+        /\/budget_schedules$/.test(path) ||
+        /\/insights$/.test(path));
     const canRetryTransport = !isCreatingRequest;
     const maxRetries = endBy === undefined && !scope?.noRetry ? this.maxRetries : 0;
     const timeout = endBy === undefined ? this.timeout : Math.max(1, endBy - Date.now());
@@ -766,6 +833,11 @@ export class MetaApiClient {
           timeout,
         );
 
+        // Past here the request may reach Meta: whatever happens next is not "not sent".
+        if (wire) {
+          wire.fetched = true;
+          wire.status = null;
+        }
         const response = await fetch(reqUrl, {
           method,
           ...options,
@@ -773,6 +845,8 @@ export class MetaApiClient {
           redirect: "error",
           signal: controller.signal,
         });
+
+        if (wire) wire.status = response.status;
 
         // A bounded call keeps its abort armed until the answer is read.
         if (endBy === undefined) clearTimeout(timeoutId);

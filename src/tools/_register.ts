@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
-import { closeCall, validateOnlyHeld } from "../meta/client.js";
+import { closeCall, notSentOf, validateOnlyHeld } from "../meta/client.js";
 import { callContext, newCallContext, type CallContext, type SentWrite } from "../meta/write-guard.js";
 
 /**
@@ -96,15 +96,17 @@ const errorResult = (e: unknown): TextResult => ({ content: [text(e instanceof E
 /**
  * The tool result from what the call sent or was refused (spec §Design "Result order"; S3-2, S3-3), in order:
  * a refusal; a write sent under validate_only; validate_only with nothing sent; else the handler's own result.
- * Every outcome warning the guard left unacknowledged is added as a line.
+ * Every write the guard allowed and the client never sent is listed as "allowed but not sent", after the writes
+ * sent, never among them; every outcome warning the guard left unacknowledged is added as a line.
  */
 function shapeResult(ctx: CallContext, settled: { ok: true; value: unknown } | { ok: false; error: unknown }): unknown {
   const warnings = ctx.warnings.length > 0 ? [text(ctx.warnings.join("\n"))] : [];
+  const notSent = notSentOf(ctx).map((w) => `allowed but not sent: ${w.method} ${w.path}: ${w.error}`);
 
   if (ctx.refusal !== null) {
     const sent = ctx.sent.map((w) => (ctx.validateOnly ? `${w.method} ${w.path}: ${labelLine(w)}` : `${w.method} ${w.path}`));
     const before = sent.length > 0 ? `writes sent before it:\n${sent.join("\n")}` : "writes sent before it: none";
-    return { content: [text(`${ctx.refusal}\n${before}`), ...warnings], isError: true };
+    return { content: [text([ctx.refusal, before, ...notSent].join("\n")), ...warnings], isError: true };
   }
 
   if (ctx.validateOnly && ctx.sent.length > 0) {
@@ -113,11 +115,16 @@ function shapeResult(ctx: CallContext, settled: { ok: true; value: unknown } | {
       w.ok ? `Meta's answer: ${w.answer}` : `Meta's error: ${w.answer}`,
       labelLine(w),
     ]);
+    lines.push(...notSent);
     if (validateOnlyHeld(ctx)) lines.push(VALIDATE_ONLY_NOT_SENT);
     return { content: [text(lines.join("\n")), ...warnings], ...(ctx.sent.some((w) => !w.ok) ? { isError: true } : {}) };
   }
 
-  const extra = [...(ctx.validateOnly ? [text(VALIDATE_ONLY_NO_WRITE)] : []), ...warnings];
+  const extra = [
+    ...(ctx.validateOnly ? [text(VALIDATE_ONLY_NO_WRITE)] : []),
+    ...(notSent.length > 0 ? [text(notSent.join("\n"))] : []),
+    ...warnings,
+  ];
   if (!settled.ok) {
     if (extra.length === 0) throw settled.error;
     const r = errorResult(settled.error);
