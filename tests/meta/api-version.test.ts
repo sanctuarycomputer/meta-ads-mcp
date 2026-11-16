@@ -43,6 +43,12 @@ describe("resolveMetaApiVersion", () => {
     expect(() => resolveMetaApiVersion()).toThrow(/META_API_VERSION/);
   });
 
+  // Not of the form vN.N: refused by the pattern, naming the variable (final-1b R4).
+  it.each(["v27", "27.0", "v100.0", "garbage", "V27.0", "v27.0.1"])("refuses META_API_VERSION=%s", (value) => {
+    vi.stubEnv("META_API_VERSION", value);
+    expect(() => resolveMetaApiVersion()).toThrow(/META_API_VERSION/);
+  });
+
   it.each(REFUSED)("refuses %s as a client version", (value) => {
     expect(() => assertMetaApiVersion(value)).toThrow(/v27\.0/);
     expect(() => new MetaApiClient({ apiVersion: value })).toThrow(/v27\.0/);

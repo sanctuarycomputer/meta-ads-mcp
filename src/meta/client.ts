@@ -58,6 +58,15 @@ function requireAppSecret(): string {
   return secret;
 }
 
+// Visible ASCII only: what Meta issues, and what a header value can carry.
+const HEADER_SAFE_TOKEN = /^[\x21-\x7e]+$/;
+
+// The token travels only in the header: a field of this name, in any letter
+// case, is dropped from every query and body.
+function isAccessTokenName(name: string): boolean {
+  return name.toLowerCase() === "access_token";
+}
+
 // The caller's headers, whatever their form, with the client's Authorization
 // as the only one: a caller's own, in any letter case, is dropped.
 function withAuthorization(headers: HeadersInit | undefined, auth: { Authorization: string }): Record<string, string> {
@@ -80,9 +89,18 @@ function withAuthorization(headers: HeadersInit | undefined, auth: { Authorizati
  */
 export function signGraphRequest(url: URL, token: string): { Authorization: string } {
   const secret = requireAppSecret();
-  url.searchParams.delete("access_token");
-  url.searchParams.set("appsecret_proof", createHmac("sha256", secret).update(token).digest("hex"));
-  return { Authorization: `Bearer ${token}` };
+  // Sent and signed as one value: surrounding whitespace is trimmed, and a
+  // token a header can't carry is refused here. fetch would otherwise throw
+  // an error that quotes the whole "Bearer <token>" value.
+  const sent = token.trim();
+  if (!HEADER_SAFE_TOKEN.test(sent)) {
+    throw new Error("The Meta access token can't be sent: it is empty or holds whitespace, a control character or a non-ASCII character.");
+  }
+  for (const name of [...url.searchParams.keys()]) {
+    if (isAccessTokenName(name)) url.searchParams.delete(name);
+  }
+  url.searchParams.set("appsecret_proof", createHmac("sha256", secret).update(sent).digest("hex"));
+  return { Authorization: `Bearer ${sent}` };
 }
 
 // An error whose text was written here, with nothing of the request or the
@@ -168,9 +186,12 @@ export class MetaApiClient {
     body?: Record<string, unknown>,
   ): Promise<T> {
     const url = this.buildUrl(path);
+    const sent = body === undefined
+      ? undefined
+      : Object.fromEntries(Object.entries(body).filter(([key]) => !isAccessTokenName(key)));
     return this.execute<T>("POST", url, path, {
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(sent),
     });
   }
 
@@ -182,7 +203,7 @@ export class MetaApiClient {
     const url = this.buildUrl(path);
     const formBody = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
-      formBody.set(key, String(value));
+      if (!isAccessTokenName(key)) formBody.set(key, String(value));
     }
     return this.execute<T>("POST", url, path, {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -196,7 +217,9 @@ export class MetaApiClient {
   ): Promise<T> {
     const url = this.buildUrl(path);
     // The token travels only in the header.
-    formData.delete("access_token");
+    for (const name of [...new Set(formData.keys())]) {
+      if (isAccessTokenName(name)) formData.delete(name);
+    }
     return this.execute<T>("POST", url, path, { body: formData });
   }
 

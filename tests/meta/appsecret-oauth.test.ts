@@ -9,6 +9,7 @@ import {
   type MetaOAuthConfig,
 } from "../../src/auth/meta-oauth.js";
 import { TEST_APP_SECRET, bearerTokenOf, mockFetchResponse } from "../setup.js";
+import { logger } from "../../src/utils/logger.js";
 
 // The OAuth helpers' Graph reads are signed like the client's (fork review
 // M1, M2): the token only in the Bearer header, its appsecret_proof in the
@@ -115,6 +116,52 @@ describe("no app secret, no OAuth Graph read", () => {
     const checked = await validateToken(TOKEN);
     expect(checked.valid).toBe(false);
     expect(checked.error).toMatch(/META_APP_SECRET/);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+// A token a header can't carry is refused before fetch, and no error, result
+// or log line quotes it (final-1b R1).
+describe("the OAuth helpers with a token that can't be a header value", () => {
+  const LEFT = "LEFTPIECE";
+  const RIGHT = "RIGHTPIECE";
+  const bad = `${LEFT}\n${RIGHT}`;
+  const quotes = (text: string) => text.includes(LEFT) || text.includes(RIGHT);
+  const logged = () => [logger.info, logger.warn, logger.error, logger.debug]
+    .flatMap((fn) => vi.mocked(fn).mock.calls)
+    .map((args) => JSON.stringify(args))
+    .join("\n");
+
+  beforeEach(() => {
+    process.env.META_APP_SECRET = TEST_APP_SECRET;
+    vi.stubGlobal("fetch", vi.fn(async () => mockFetchResponse({ id: "42", data: [{ id: "7" }] })));
+    for (const level of ["info", "warn", "error", "debug"] as const) vi.spyOn(logger, level);
+  });
+
+  afterEach(() => {
+    delete process.env.META_APP_SECRET;
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("fetchProfile refuses it unsent and unquoted", async () => {
+    const failure = await fetchProfile(bad).then(() => undefined, (err: unknown) => err as Error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(quotes(String(failure?.message))).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("validateToken reports it invalid, unsent, and quotes it neither in its answer nor its log", async () => {
+    const checked = await validateToken(bad);
+    expect(checked.valid).toBe(false);
+    expect(quotes(String(checked.error))).toBe(false);
+    expect(quotes(logged())).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("fetchPrimaryBusiness returns null, unsent, and quotes it in no log", async () => {
+    await expect(fetchPrimaryBusiness(bad)).resolves.toBeNull();
+    expect(quotes(logged())).toBe(false);
     expect(fetch).not.toHaveBeenCalled();
   });
 });

@@ -5,6 +5,7 @@ import { RateLimiter } from "../../src/meta/rate-limiter.js";
 import { WritePacer } from "../../src/meta/write-pacer.js";
 import { withPageToken } from "../../src/meta/page-token.js";
 import { tokenManager } from "../../src/auth/token-manager.js";
+import { requestContext } from "../../src/auth/token-store.js";
 import { TEST_APP_SECRET, bearerTokenOf, cleanupTestToken, mockFetchResponse, setupTestToken } from "../setup.js";
 
 // Every Graph request is signed (fork review M1, M2): the token travels only
@@ -202,6 +203,123 @@ describe("signGraphRequest", () => {
     expect(url.searchParams.has("access_token")).toBe(false);
     expect(url.searchParams.get("fields")).toBe("id");
     expect(url.searchParams.get("appsecret_proof")).toBe(expectedProof(TOKEN));
+  });
+});
+
+// A token is sent as a header value, which can't carry whitespace or control
+// characters: fetch would throw quoting "Bearer <token>". Such a token is
+// refused before anything is built, by a message that never quotes it
+// (final-1b R1). Surrounding whitespace is trimmed, and the trimmed token is
+// both sent and signed (R2).
+const LEFT = "LEFTPIECE";
+const RIGHT = "RIGHTPIECE";
+const BAD_TOKENS = ["\n", "\r", "\r\n", " ", "\t", "\u0000", "\u007f", "\u00e9", "\u2028"].map((c) => [JSON.stringify(c), `${LEFT}${c}${RIGHT}`]);
+const quotes = (text: string) => text.includes(LEFT) || text.includes(RIGHT);
+
+describe("a token that can't be a header value", () => {
+  let client: MetaApiClient;
+
+  beforeEach(() => {
+    setupTestToken(TOKEN);
+    tokenManager.resetForTests();
+    vi.stubGlobal("fetch", vi.fn(async () => mockFetchResponse({ id: "1" })));
+    client = new MetaApiClient({ maxRetries: 0 });
+  });
+
+  afterEach(() => {
+    cleanupTestToken();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it.each(BAD_TOKENS)("signGraphRequest refuses a token holding %s without quoting it", (_label, bad) => {
+    let message = "";
+    try {
+      signGraphRequest(new URL("https://graph.facebook.com/v27.0/me"), bad);
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toMatch(/access token/i);
+    expect(quotes(message)).toBe(false);
+  });
+
+  it.each(BAD_TOKENS)("a client request with a token holding %s is refused unsent and unquoted", async (_label, bad) => {
+    const failure = await requestContext.run({ accessToken: bad }, () => client.get("/me")).then(() => undefined, (err: unknown) => err as Error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(quotes(String(failure?.message))).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(BAD_TOKENS)("a detached read with a token holding %s resolves undefined unsent", async (_label, bad) => {
+    await expect(client.getDetached("/act_1", { fields: "currency" }, new AbortController().signal, bad)).resolves.toBeUndefined();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("trims a token's surrounding whitespace, and sends and signs the trimmed token", async () => {
+    await requestContext.run({ accessToken: `  ${TOKEN}\n` }, () => client.get("/me"));
+    const [url, init] = calls()[0];
+    expect(bearerTokenOf(init)).toBe(TOKEN);
+    expect(new URL(url).searchParams.get("appsecret_proof")).toBe(expectedProof(TOKEN));
+  });
+
+  it("trims an env token the same way", async () => {
+    process.env.META_ACCESS_TOKEN = `${TOKEN}\n`;
+    await client.get("/me");
+    const [url, init] = calls()[0];
+    expect(bearerTokenOf(init)).toBe(TOKEN);
+    expect(new URL(url).searchParams.get("appsecret_proof")).toBe(expectedProof(TOKEN));
+  });
+});
+
+// No access_token travels anywhere but the header, in any letter case and in
+// any kind of body (final-1b R3, final-1 F4).
+describe("access_token in any letter case, in the URL or a body", () => {
+  let client: MetaApiClient;
+
+  beforeEach(() => {
+    setupTestToken(TOKEN);
+    tokenManager.resetForTests();
+    vi.stubGlobal("fetch", vi.fn(async () => mockFetchResponse({ id: "1" })));
+    client = new MetaApiClient({ maxRetries: 0 });
+  });
+
+  afterEach(() => {
+    cleanupTestToken();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const named = (entries: Array<[string, string]>) => entries.filter(([name]) => name.toLowerCase() === "access_token");
+
+  it("removes it from the query", async () => {
+    await client.get("/me", { ACCESS_TOKEN: "smuggled-one", Access_Token: "smuggled-two", fields: "id" });
+    const url = new URL(calls()[0][0]);
+    expect(named([...url.searchParams.entries()])).toEqual([]);
+    expect(url.searchParams.get("fields")).toBe("id");
+  });
+
+  it("removes it from a JSON body", async () => {
+    await client.post("/120001", { access_token: "smuggled-one", ACCESS_TOKEN: "smuggled-two", name: "x" });
+    const body = JSON.parse(String(calls()[0][1]?.body)) as Record<string, unknown>;
+    expect(named(Object.entries(body) as Array<[string, string]>)).toEqual([]);
+    expect(body.name).toBe("x");
+  });
+
+  it("removes it from a form body", async () => {
+    await client.postForm("/120001", { Access_Token: "smuggled-one", name: "x" });
+    const body = new URLSearchParams(String(calls()[0][1]?.body));
+    expect(named([...body.entries()])).toEqual([]);
+    expect(body.get("name")).toBe("x");
+  });
+
+  it("removes it from a multipart body", async () => {
+    const form = new FormData();
+    form.set("ACCESS_TOKEN", "smuggled-one");
+    form.set("name", "x");
+    await client.postMultipart("/120001/assets", form);
+    const body = calls()[0][1]?.body as FormData;
+    expect(named([...body.entries()].map(([k, v]) => [k, String(v)]))).toEqual([]);
+    expect(body.get("name")).toBe("x");
   });
 });
 
