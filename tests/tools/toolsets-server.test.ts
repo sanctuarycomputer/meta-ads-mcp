@@ -62,6 +62,8 @@ describe("createServer() reads the toolsets from the env", () => {
     expect(s.tools).not.toContain("ads_create_campaign");
     expect(s.tools).not.toContain("ads_library_scrape");
     expect(s.tools.length).toBe(34);
+    setEnv({ META_ADS_TOOLSETS: DEFAULT_READ });
+    expect(s.tools).toEqual((await served(createServer())).tools); // the pinned literal is in toolsets.test.ts (check 1.3)
     expect(s.instructions).toBeUndefined();
     expect(s.capabilities.prompts).toBeUndefined();
     expect(s.capabilities.resources).toBeUndefined();
@@ -72,6 +74,13 @@ describe("createServer() reads the toolsets from the env", () => {
     expect((await served(createServer())).tools).toEqual(
       ["ads_create_campaign", "ads_delete_campaign", "ads_update_campaign"],
     );
+  });
+
+  it("reads META_ADS_READ_ONLY: a write name is refused on a read-only server, served without it", async () => {
+    setEnv({ META_ADS_TOOLSETS: "campaigns:write", META_ADS_READ_ONLY: "1" });
+    expect(() => createServer()).toThrow(/campaigns:write \(write name on a read-only server\)/);
+    setEnv({ META_ADS_TOOLSETS: "campaigns:write" });
+    expect((await served(createServer())).tools).toHaveLength(3);
   });
 
   it("refuses a bad name instead of building a server", () => {

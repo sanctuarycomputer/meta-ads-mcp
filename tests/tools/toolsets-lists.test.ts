@@ -530,17 +530,33 @@ function blocks(sf: ts.SourceFile): Map<string, ts.Node> {
 /**
  * Writes in the node and in everything in the same file it names, followed
  * transitively by symbol: the declaration of each name (a function, class,
- * method, accessor, variable or property, whatever its value) and every later
- * assignment to it.
+ * method, accessor, variable or property, whatever its value; for a name bound
+ * by destructuring, the whole declaration), the value a shorthand property
+ * stands for, and every assignment to it or to a property of it (`=`, `??=`
+ * and the other assignment operators).
  */
 function reachableWrites(start: ts.Node, { sf, checker }: Analysed): string[] {
   const assigned = new Map<ts.Symbol, ts.Node[]>();
+  const assign = (target: ts.Node, n: ts.Node) => {
+    const sym = checker.getSymbolAtLocation(target);
+    if (sym) assigned.set(sym, [...(assigned.get(sym) ?? []), n]);
+  };
   walk(sf, (n) => {
-    if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-      const sym = checker.getSymbolAtLocation(n.left);
-      if (sym) assigned.set(sym, [...(assigned.get(sym) ?? []), n]);
-    }
+    const op = ts.isBinaryExpression(n) ? n.operatorToken.kind : undefined;
+    if (!ts.isBinaryExpression(n) || op === undefined || op < ts.SyntaxKind.FirstAssignment || op > ts.SyntaxKind.LastAssignment) return;
+    // `x = …`, `x ??= …`, and `holder.x = …` / `holder[k] = …` (also filed under the holder,
+    // whose type may be too loose for the property to resolve).
+    assign(n.left, n);
+    let root: ts.Expression = n.left;
+    while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root) || ts.isParenthesizedExpression(root)) root = root.expression;
+    if (root !== n.left) assign(root, n);
   });
+  /** A binding inside a destructuring pattern is followed as its whole declaration, so the destructured value is read. */
+  const enclosing = (d: ts.Node): ts.Node => {
+    let cur = d;
+    while (ts.isBindingElement(cur) || ts.isObjectBindingPattern(cur) || ts.isArrayBindingPattern(cur)) cur = cur.parent;
+    return cur;
+  };
   const out: string[] = [];
   const seen = new Set<ts.Symbol>();
   const queue: Array<[string, ts.Node]> = [["(block)", start]];
@@ -549,11 +565,15 @@ function reachableWrites(start: ts.Node, { sf, checker }: Analysed): string[] {
     for (const w of writesIn(node)) out.push(`${label}: ${w}`);
     walk(node, (n) => {
       if (!ts.isIdentifier(n) && !ts.isPrivateIdentifier(n)) return;
-      const sym = checker.getSymbolAtLocation(n);
-      if (!sym || seen.has(sym)) return;
-      seen.add(sym);
-      for (const d of [...(sym.declarations ?? []), ...(assigned.get(sym) ?? [])]) {
-        if (d.getSourceFile() === sf && !(d.pos >= node.pos && d.end <= node.end)) queue.push([sym.name, d]);
+      const syms = [checker.getSymbolAtLocation(n)];
+      // `{ sneak }`: the property's symbol, and the value it is short for.
+      if (ts.isShorthandPropertyAssignment(n.parent) && n.parent.name === n) syms.push(checker.getShorthandAssignmentValueSymbol(n.parent));
+      for (const sym of syms) {
+        if (!sym || seen.has(sym)) continue;
+        seen.add(sym);
+        for (const d of [...(sym.declarations ?? []).map(enclosing), ...(assigned.get(sym) ?? [])]) {
+          if (d.getSourceFile() === sf && !(d.pos >= node.pos && d.end <= node.end)) queue.push([sym.name, d]);
+        }
       }
     });
   }
@@ -605,6 +625,11 @@ describe("the static check's parser", () => {
     ["a class constructor", `class C { constructor() { void metaApiClient.postForm('/x', {}); } }\n${reg("new C();")}`],
     ["a helper assigned after its declaration", `let h: () => Promise<unknown>;\nh = async () => { ${W} };\n${reg("await h();")}`],
     ["a getter", `const o = { get h() { return metaApiClient.postForm('/x', {}); } };\n${reg("await o.h;")}`],
+    ["a helper reached through a shorthand property", `const sneak = async () => { ${W} };\nconst o = { sneak };\n${reg("await o.sneak();")}`],
+    ["a helper bound by destructuring", `const { sneak } = { sneak: async () => { ${W} } };\n${reg("await sneak();")}`],
+    ["a helper bound by array destructuring", `const [sneak] = [async () => { ${W} }];\n${reg("await sneak();")}`],
+    ["a helper set by ??=", `let h: (() => Promise<unknown>) | undefined;\nh ??= async () => { ${W} };\n${reg("await h?.();")}`],
+    ["a helper set on an any-typed holder", `const holder: any = {};\nholder.h = async () => { ${W} };\n${reg("await holder.h();")}`],
     ["a helper named like a register function", `async function registerSneakTools() { ${W} }\n${reg("await registerSneakTools();")}`],
   ])("finds a write in %s", (_label, text) => {
     expect(writes(text)).not.toEqual([]);
