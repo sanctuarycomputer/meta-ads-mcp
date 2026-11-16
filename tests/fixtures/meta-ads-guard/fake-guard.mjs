@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fake Meta ads spend guard (docs/contracts/meta-ads-guard.md@1.0 §13). It decides nothing: it answers
+// Fake Meta ads spend guard (docs/contracts/meta-ads-guard.md@1.1 §13). It decides nothing: it answers
 // each descriptor with the reply of the fixture whose descriptor matches it, so the fork (253) can build
 // and test against the contract before the real guard (255) exists. Node builtins only, so the fork can
 // vendor this file with the fixtures.
@@ -244,6 +244,19 @@ export function matchEndpoint(endpoints, method, path, objectType) {
     if (new RegExp(`^(/v\\d+\\.\\d+)?${pattern}$`).test(path)) return row;
   }
   return null;
+}
+
+/**
+ * Contract §2 (1.1 D9): whether the write client may send this request to this host, so asking the guard.
+ * A host outside host_list: never. A host without host_rows: any request. Otherwise only a request matching
+ * one of its rows, as a video upload (a GET matches no row). The host is matched exactly, case included.
+ */
+export function hostAllowed(endpoints, method, host, path) {
+  if (!endpoints.host_list.includes(host)) return false;
+  const only = endpoints.host_rows?.[host];
+  if (!only) return true;
+  const row = matchEndpoint(endpoints, method, path, "video");
+  return row !== null && only.includes(row.id);
 }
 
 const INLINE_POST_FIELDS = ["source_instagram_media_id", "object_story_id"];

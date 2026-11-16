@@ -1,4 +1,4 @@
-// buildDescriptor (ticket 253, Task 4): the descriptor of contract docs/contracts/meta-ads-guard.md@1.0 §3 built
+// buildDescriptor (ticket 253, Task 4): the descriptor of contract docs/contracts/meta-ads-guard.md@1.1 §3 built
 // from a write's request and the fork's GETs. Every vendored fixture with a descriptor that 253 drives is rebuilt
 // from its scenario (tests/fixtures/meta-ads-guard/harness.ts) and must `normalise` equal; then one case per rule.
 import { describe, expect, it } from "vitest";
@@ -119,11 +119,12 @@ const callTo = (calls: Call[], path: string): Call[] => calls.filter((c) => c.pa
 describe("every vendored fixture 253 drives", () => {
   const driven = FIXTURES.filter((f) => f.descriptor && !Object.hasOwn(SKIPPED, f.name) && (f.for === "both" || f.for === "fork"));
 
-  it("SKIPPED names exactly the twelve, each a vendored fixture", () => {
-    expect(Object.keys(SKIPPED)).toHaveLength(12);
+  it("SKIPPED names exactly the fourteen, each a vendored fixture", () => {
+    expect(Object.keys(SKIPPED)).toHaveLength(14);
     const names = new Set(FIXTURES.map((f) => f.name));
     for (const name of Object.keys(SKIPPED)) expect(names.has(name)).toBe(true);
-    expect(driven.length + Object.keys(SKIPPED).length + 1).toBe(FIXTURES.length); // + outcome-record
+    // + outcome-record, + the three `for: "client"` fixtures (tests/must-fix/client-fixtures.test.ts).
+    expect(driven.length + Object.keys(SKIPPED).length + 1 + 3).toBe(FIXTURES.length);
   });
 
   it.each(driven.map((f) => [f.name, f] as const))("%s: the descriptor built from its scenario is the fixture's", async (_name, f) => {
@@ -789,7 +790,8 @@ describe("rule 11: unreadable values are refused", () => {
 
   it("a bounded array of objects is readable", async () => {
     const { d } = await build(post(`/${BUSINESS}/ad_studies`, { cells: [{ campaigns: [CAMP] }], objectives: [{ name: "o" }] }), world());
-    expect(d.params_keys).toEqual(["cells", "objectives", "objectives.name"]);
+    // Contract 1.1 C10: cells is bounded, so its leaf paths are params_keys too.
+    expect(d.params_keys).toEqual(["cells", "cells.campaigns", "objectives", "objectives.name"]);
   });
 });
 

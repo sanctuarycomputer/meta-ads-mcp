@@ -2,7 +2,7 @@
 // (RealWriteGate and GuardRunner), builds each fixture's descriptor from the fixture's scenario
 // (tests/fixtures/meta-ads-guard/harness.ts) and asks the vendored fake guard, which answers only a descriptor that
 // `normalise`s equal to a fixture's. The fake runs behind stubs/tee-stderr.mjs, whose log shows which fixture it
-// matched and every message the fork sent. Contract docs/contracts/meta-ads-guard.md@1.0 §2, §8, §9, §10, §13.
+// matched and every message the fork sent. Contract docs/contracts/meta-ads-guard.md@1.1 §2, §8, §9, §10, §13.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
@@ -252,16 +252,18 @@ describe("outcome-record", { timeout: GUARD_TEST_MS }, () => {
 
 // Last in the file (cases run in order): every fixture was driven or skipped by name, none both, none neither.
 describe("skips", () => {
-  it("SKIPPED names exactly the twelve, each a vendored fixture", () => {
+  it("SKIPPED names exactly the fourteen (contract 1.1 §13), each a vendored fixture", () => {
     expect(Object.keys(SKIPPED).sort()).toEqual([
       "account-limit-flag-wrong",
       "act-path-other-account",
-      "cross-brand__asset_feed_spec",
+      "bare-creative",
+      "bare-creative-on-update",
       "garden3d-mixed-both",
       "identity-key-no-entry",
       "invalid__unknown-identity-field",
       "invalid__unknown-key",
       "kind-mismatch",
+      "lead-form-no-entry",
       "null-ad-account",
       "unknown-kind-no-campaign",
       "unresolved-campaign",
@@ -271,10 +273,13 @@ describe("skips", () => {
     for (const name of Object.keys(SKIPPED)) expect(names.has(name)).toBe(true);
   });
 
+  // The three `for: "client"` fixtures (§13) carry no descriptor: tests/must-fix/client-fixtures.test.ts drives them.
   it("every other fixture ran, and passed", () => {
     const skipped = Object.keys(SKIPPED);
-    expect(skipped.filter((n) => ran.has(n))).toEqual([]);
-    expect(FIXTURES.map((f) => f.name).filter((n) => !ran.has(n) && !skipped.includes(n))).toEqual([]);
-    expect(ran.size + skipped.length).toBe(FIXTURES.length);
+    const forClient = FIXTURES.filter((f) => f.for === "client").map((f) => f.name);
+    expect(forClient).toHaveLength(3);
+    expect(skipped.filter((n) => ran.has(n) || forClient.includes(n))).toEqual([]);
+    expect(FIXTURES.map((f) => f.name).filter((n) => !ran.has(n) && !skipped.includes(n) && !forClient.includes(n))).toEqual([]);
+    expect(ran.size + skipped.length + forClient.length).toBe(FIXTURES.length);
   });
 });

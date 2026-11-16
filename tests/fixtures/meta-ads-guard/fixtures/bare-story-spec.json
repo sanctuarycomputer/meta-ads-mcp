@@ -19,7 +19,8 @@
     "path": "/act_9990000000000001/adcreatives",
     "params_keys": [
       "name",
-      "object_story_spec"
+      "object_story_spec",
+      "object_id"
     ],
     "ad_account": "act_9990000000000001",
     "account": {
@@ -44,7 +45,15 @@
       "end_time": null
     },
     "campaigns": [],
-    "identity": [],
+    "identity": [
+      {
+        "field": "object_id",
+        "via": "direct",
+        "id": "9991000000000001",
+        "owner_page": "9991000000000001",
+        "owner_ig": null
+      }
+    ],
     "kind": "create",
     "account_limit": false,
     "validate_only": false

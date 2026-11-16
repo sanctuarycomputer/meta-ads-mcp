@@ -14,7 +14,7 @@ import type { MetaApiError, MetaApiResponse } from "./types/common.js";
 import { collectAllPages } from "./paginator.js";
 import { assertMetaApiVersion, resolveMetaApiVersion } from "./api-version.js";
 import { isCredentialName, scrubCredentialsDeep, scrubErrorCredentials } from "../utils/scrub-credentials.js";
-import { ENDPOINTS, WriteRefusal, type GraphGet } from "./write-descriptor.js";
+import { ENDPOINTS, VIDEO_HOST, WriteRefusal, hostAllowed, matchEndpoint, type GraphGet } from "./write-descriptor.js";
 import { RealWriteGate, callContext, type CallContext, type WriteGate } from "./write-guard.js";
 
 // An error answer can quote the request, its token included (a Page token
@@ -56,9 +56,10 @@ const isReadServer = (): boolean => process.env.META_ADS_READ_ONLY === "1";
  * override or a Graph batch parameter (any case), a repeated multipart name, an `async_batch_requests` segment, a
  * joined path (`/<version><path>`, checked raw, before `new URL` folds it) that is not plain, a base URL that is not
  * https on a listed host with no port or userinfo, or that is not exactly `https://<host>` (what is checked is
- * what the URL is built from); a field named `__proto__`, `constructor` or `prototype`; and on the read server
- * (`META_ADS_READ_ONLY=1`) any method but GET, except an insights report POST (`ENDPOINTS.read_post`). Nothing it
- * says quotes the path or a value.
+ * what the URL is built from), or whose host takes only other requests (`hostAllowed`, contract 1.1 §2: the video
+ * host takes only `POST /act_{id}/advideos`); a field named `__proto__`, `constructor` or `prototype`; and on the read
+ * server (`META_ADS_READ_ONLY=1`) any method but GET, except an insights report POST (`ENDPOINTS.read_post`).
+ * Nothing it says quotes the path or a value.
  */
 export function checkRequestShape(
   method: string,
@@ -98,6 +99,10 @@ export function checkRequestShape(
   if (base.username !== "" || base.password !== "") throw new WriteRefusal("the base URL has userinfo");
   // The URL is built by joining this string: it must be the origin itself, with no path, query, fragment or slash.
   if (baseUrl !== `https://${base.hostname}`) throw new WriteRefusal("the base URL is not exactly https:// and its host");
+  // Contract 1.1 §2 (C14), after the checks above (their order and messages stand): a host with rows takes only them.
+  if (!hostAllowed(method, base.host, joined)) {
+    throw new WriteRefusal(`the host ${base.host} takes only ${(ENDPOINTS.host_rows[base.host] ?? []).join(", ")}`);
+  }
   if (isReadServer() && method !== "GET" && !(method === "POST" && READ_POST.test(joined))) {
     const path = joined.replace(/^\/v\d+\.\d+/, "");
     throw new WriteRefusal(`this server is read-only: ${method} ${path} is neither a GET nor an insights report`);
@@ -374,7 +379,7 @@ export class MetaApiClient {
     params?: Record<string, string | number | boolean | undefined>,
     scope?: RequestScope,
   ): Promise<T> {
-    const url = this.buildUrl(path, params);
+    const url = this.buildUrl("GET", path, params);
     return this.execute<T>("GET", url, path, params ?? {}, undefined, scope);
   }
 
@@ -393,7 +398,7 @@ export class MetaApiClient {
       return out;
     });
     return this.sendWrite<T>("POST", path, decoded, VALIDATE_ONLY, (p) => ({
-      url: this.buildUrl(path),
+      url: this.buildUrl("POST", path),
       init: {
         headers: { "Content-Type": "application/json" },
         // No body and nothing added: sent as before, with no body at all.
@@ -408,7 +413,7 @@ export class MetaApiClient {
     scope?: RequestScope,
   ): Promise<T> {
     return this.sendWrite<T>("POST", path, decodedIn(() => decodeForm(params)), VALIDATE_ONLY_FORM, (p) => ({
-      url: this.buildUrl(path),
+      url: this.buildUrl("POST", path),
       init: {
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: encodeForm(p).toString(),
@@ -438,7 +443,7 @@ export class MetaApiClient {
       if (p.execution_options !== undefined && !formData.has("execution_options")) {
         formData.append("execution_options", encodeValue(p.execution_options));
       }
-      return { url: this.buildUrl(path), init: { body: formData } };
+      return { url: this.buildUrl("POST", path), init: { body: formData } };
     }, undefined, names);
   }
 
@@ -455,10 +460,10 @@ export class MetaApiClient {
     return this.sendWrite<T>("DELETE", path, decodedIn(() => decodeForm(params ?? {})), VALIDATE_ONLY_FORM, (p) =>
       opts?.formBody
         ? {
-          url: this.buildUrl(path),
+          url: this.buildUrl("DELETE", path),
           init: { headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: encodeForm(p).toString() },
         }
-        : { url: this.buildUrl(path, Object.fromEntries(Object.entries(p).map(([k, v]) => [k, encodeValue(v)]))) },
+        : { url: this.buildUrl("DELETE", path, Object.fromEntries(Object.entries(p).map(([k, v]) => [k, encodeValue(v)]))) },
     scope);
   }
 
@@ -500,13 +505,13 @@ export class MetaApiClient {
     token: string,
   ): Promise<T | undefined> {
     // A request it must never send is refused, not quietly dropped.
-    checkRequestShape("GET", this.baseUrl, this.joined(path), params);
+    checkRequestShape("GET", this.baseFor("GET", this.joined(path)), this.joined(path), params);
     const tokenHash = hashToken(token);
     const accountId = extractAccountId(path);
     if (this.circuitBreaker.isOpen({ tokenHash, accountId, type: guessBucType("GET", path) })) return undefined;
     if (this.rateLimiter.getThrottleDelay({ tokenHash, accountId }) > 0) return undefined;
 
-    const url = new URL(this.buildUrl(path, params));
+    const url = new URL(this.buildUrl("GET", path, params));
     let auth: { Authorization: string };
     try {
       auth = signGraphRequest(url, token);
@@ -579,7 +584,7 @@ export class MetaApiClient {
     const ctx = callContext.getStore();
     if (ctx && closedCalls.has(ctx)) throw new WriteRefusal("the tool call already returned");
     try {
-      checkRequestShape(method, this.baseUrl, this.joined(path), decoded, multipartNames);
+      checkRequestShape(method, this.baseFor(method, this.joined(path)), this.joined(path), decoded, multipartNames);
     } catch (e) {
       throw noted(ctx, e);
     }
@@ -640,12 +645,25 @@ export class MetaApiClient {
     if (warning !== null) ctx?.warnings.push(warning);
   }
 
+  /**
+   * The base URL a request goes to (contract 1.1 §2, `host_rows`): a `POST` matching the row
+   * `POST /act_{id}/advideos` goes to the video host; every other request to this client's base URL. The row is a
+   * POST row, so matching it with the request's own method is the method test too.
+   */
+  private baseFor(method: string, joinedPath: string): string {
+    if (matchEndpoint(method, joinedPath, "video")?.id === "POST /act_{id}/advideos") {
+      return `https://${VIDEO_HOST}`;
+    }
+    return this.baseUrl;
+  }
+
   private buildUrl(
+    method: string,
     path: string,
     params?: Record<string, string | number | boolean | undefined>,
   ): string {
-    const base = `${this.baseUrl}/${this.apiVersion}${path.startsWith("/") ? path : `/${path}`}`;
-    const url = new URL(base);
+    const joined = this.joined(path);
+    const url = new URL(`${this.baseFor(method, joined)}${joined}`);
 
     if (params) {
       for (const [key, value] of Object.entries(params)) {
@@ -669,7 +687,7 @@ export class MetaApiClient {
     const ctx = callContext.getStore();
     const multipartNames = options?.body instanceof FormData ? [...options.body.keys()] : undefined;
     try {
-      checkRequestShape(method, this.baseUrl, this.joined(path), params, multipartNames);
+      checkRequestShape(method, this.baseFor(method, this.joined(path)), this.joined(path), params, multipartNames);
     } catch (e) {
       throw noted(ctx, e);
     }

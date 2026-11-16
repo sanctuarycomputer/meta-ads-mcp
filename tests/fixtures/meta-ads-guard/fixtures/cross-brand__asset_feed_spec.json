@@ -22,7 +22,8 @@
       "object_story_spec",
       "asset_feed_spec",
       "object_story_spec.page_id",
-      "asset_feed_spec.bodies.text"
+      "asset_feed_spec.bodies.text",
+      "asset_feed_spec.call_to_actions.value.page"
     ],
     "ad_account": "act_9990000000000001",
     "account": {

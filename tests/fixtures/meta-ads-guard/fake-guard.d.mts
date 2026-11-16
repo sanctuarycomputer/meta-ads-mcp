@@ -22,3 +22,4 @@ export function matchEndpoint(endpoints: unknown, method: string, path: string, 
 export function deriveKind(row: unknown, d: unknown): string;
 export function deriveCreativeBearing(row: unknown, d: unknown): boolean;
 export function deriveAccountLimit(endpoints: unknown, row: unknown, d: unknown): unknown;
+export function hostAllowed(endpoints: unknown, method: string, host: string, path: string): boolean;

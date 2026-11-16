@@ -1,0 +1,15 @@
+{
+  "name": "host-video-get",
+  "covers": [
+    "host-video-get"
+  ],
+  "for": "client",
+  "decided_by": "client",
+  "why": "graph-video.facebook.com takes no GET: the client refuses it",
+  "request": {
+    "method": "GET",
+    "host": "graph-video.facebook.com",
+    "path": "/act_9990000000000001/advideos"
+  },
+  "client": "refuse"
+}

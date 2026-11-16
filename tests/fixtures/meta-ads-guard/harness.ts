@@ -65,10 +65,11 @@ export interface Scenario {
 }
 
 /**
- * Fixtures 253 does not drive (ruling m-20261116-114218529), each with the builder rule that rules it out. The
- * three of contract §13 and the two `invalid__` (IP3) exist for the guard alone; the other seven hold a value no
- * request gives under buildDescriptor's rules (tests/meta/write-guard-descriptor.test.ts builds each one's
- * nearest request and asserts the consistent form).
+ * Fixtures the fork does not drive (contract 1.1 §13; ruling m-20261116-114218529), each with the builder rule that
+ * rules it out. The three field fixtures of §13 and the two `invalid__` (IP3) exist for the guard alone; the six
+ * guard-side fixtures and the three 1.1 ones (§13: `lead-form-no-entry`, `bare-creative`, `bare-creative-on-update`)
+ * hold a value no request gives under buildDescriptor's rules (tests/meta/write-guard-descriptor.test.ts builds the
+ * nearest request of several and asserts the consistent form). `cross-brand__asset_feed_spec` is driven at 1.1 (C5).
  */
 const ASSET_FEED_ID = "Task 2's IDENTITY_FIELDS: an identity id in asset_feed_spec puts its path in params_keys";
 export const SKIPPED: Readonly<Record<string, string>> = {
@@ -82,7 +83,9 @@ export const SKIPPED: Readonly<Record<string, string>> = {
   "unknown-kind-no-campaign": "rule 8: a campaign object lists self on every row",
   "unresolved-campaign": "rule 8: an unreadable parent campaign id gives no entry",
   "null-ad-account": "rule 7: account facts are read only from a resolved ad_account",
-  "cross-brand__asset_feed_spec": ASSET_FEED_ID,
+  "lead-form-no-entry": "contract §13: a fork always makes the lead-form entry, unresolved or not",
+  "bare-creative": "contract §13: a fork lists creative.creative_id whenever it made a creative_id entry",
+  "bare-creative-on-update": "contract §13: a fork lists creative.creative_id whenever it made a creative_id entry",
   "garden3d-mixed-both": ASSET_FEED_ID,
 };
 

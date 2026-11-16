@@ -1,6 +1,6 @@
-// The meta-ads-guard contract layer (docs/contracts/meta-ads-guard.md@1.0 §3-§6): the descriptor's types, the
+// The meta-ads-guard contract layer (docs/contracts/meta-ads-guard.md@1.1 §2-§6): the descriptor's types, the
 // endpoint table, and the pure derivations the descriptor builder uses. Nothing here reads Graph or the guard.
-// matchEndpoint, deriveKind, deriveAccountLimit, deriveCreativeBearing and validateDescriptor port the
+// matchEndpoint, deriveKind, deriveAccountLimit, deriveCreativeBearing, hostAllowed and validateDescriptor port the
 // contract's fake guard (tests/fixtures/meta-ads-guard/fake-guard.mjs) line for line; a test holds them equal.
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 
@@ -137,6 +137,8 @@ export interface EndpointRow {
 export interface EndpointTable {
   v: string;
   host_list: readonly string[];
+  /** Contract §2: a host listed here takes only a request matching one of its rows. */
+  host_rows: Readonly<Record<string, readonly string[]>>;
   read_post: string;
   account_limit_keys: {
     exact: readonly string[];
@@ -149,11 +151,12 @@ export interface EndpointTable {
   sub_keys: Readonly<Record<string, readonly string[]>>;
 }
 
-// Contract 1.0's endpoints.json, embedded (coverage left out: it is the guard's, not the fork's). A test holds
+// Contract 1.1's endpoints.json, embedded (coverage left out: it is the guard's, not the fork's). A test holds
 // it equal to the vendored copy; re-vendor and regenerate together.
 export const ENDPOINTS: EndpointTable = {
-  v: "1.0",
-  host_list: ["graph.facebook.com"],
+  v: "1.1",
+  host_list: ["graph.facebook.com", "graph-video.facebook.com"],
+  host_rows: { "graph-video.facebook.com": ["POST /act_{id}/advideos"] },
   read_post: "^/(v\\d+\\.\\d+/)?(act_\\d+|\\d+)/insights$",
   account_limit_keys: {
     exact: ["spend_cap_action"],
@@ -192,9 +195,9 @@ export const ENDPOINTS: EndpointTable = {
       kind: "create", refine: "boost-if-inline-post", no_campaign: false, account_limit: "by-keys",
       roles: ["parent"], validate_only: "documented", creative_bearing: "if-creative-key",
       keys: {
-        "paused-create": ["name", "adset_id", "status", "creative", "creative.creative_id", "creative.name", "creative.object_story_spec", "creative.object_story_id", "creative.source_instagram_media_id", "creative.instagram_user_id", "creative.asset_feed_spec", "creative.url_tags", "creative.degrees_of_freedom_spec", "creative.contextual_multi_ads", "creative.object_id", "creative.call_to_action", "creative.image_crops", "creative.interactive_components_spec", "creative.portrait_customizations", "creative.categorization_criteria", "creative.link_url", "creative.platform_customizations", "creative.adlabels", "conversion_domain", "adlabels", "creative_asset_groups_spec", "execution_options"],
-        "live-create": ["name", "adset_id", "status", "creative", "creative.creative_id", "creative.name", "creative.object_story_spec", "creative.object_story_id", "creative.source_instagram_media_id", "creative.instagram_user_id", "creative.asset_feed_spec", "creative.url_tags", "creative.degrees_of_freedom_spec", "creative.contextual_multi_ads", "creative.object_id", "creative.call_to_action", "creative.image_crops", "creative.interactive_components_spec", "creative.portrait_customizations", "creative.categorization_criteria", "creative.link_url", "creative.platform_customizations", "creative.adlabels", "conversion_domain", "adlabels", "creative_asset_groups_spec", "execution_options"],
-        "boost": ["name", "adset_id", "status", "creative", "creative.creative_id", "creative.name", "creative.object_story_spec", "creative.object_story_id", "creative.source_instagram_media_id", "creative.instagram_user_id", "creative.asset_feed_spec", "creative.url_tags", "creative.degrees_of_freedom_spec", "creative.contextual_multi_ads", "creative.object_id", "creative.call_to_action", "creative.image_crops", "creative.interactive_components_spec", "creative.portrait_customizations", "creative.categorization_criteria", "creative.link_url", "creative.platform_customizations", "creative.adlabels", "conversion_domain", "adlabels", "creative_asset_groups_spec", "execution_options"],
+        "paused-create": ["name", "adset_id", "status", "creative", "creative.creative_id", "creative.name", "creative.object_story_spec", "creative.object_story_id", "creative.source_instagram_media_id", "creative.instagram_user_id", "creative.asset_feed_spec", "creative.url_tags", "creative.degrees_of_freedom_spec", "creative.contextual_multi_ads", "creative.object_id", "creative.call_to_action", "creative.image_crops", "creative.portrait_customizations", "creative.categorization_criteria", "creative.link_url", "creative.platform_customizations", "creative.adlabels", "conversion_domain", "adlabels", "creative_asset_groups_spec", "execution_options"],
+        "live-create": ["name", "adset_id", "status", "creative", "creative.creative_id", "creative.name", "creative.object_story_spec", "creative.object_story_id", "creative.source_instagram_media_id", "creative.instagram_user_id", "creative.asset_feed_spec", "creative.url_tags", "creative.degrees_of_freedom_spec", "creative.contextual_multi_ads", "creative.object_id", "creative.call_to_action", "creative.image_crops", "creative.portrait_customizations", "creative.categorization_criteria", "creative.link_url", "creative.platform_customizations", "creative.adlabels", "conversion_domain", "adlabels", "creative_asset_groups_spec", "execution_options"],
+        "boost": ["name", "adset_id", "status", "creative", "creative.creative_id", "creative.name", "creative.object_story_spec", "creative.object_story_id", "creative.source_instagram_media_id", "creative.instagram_user_id", "creative.asset_feed_spec", "creative.url_tags", "creative.degrees_of_freedom_spec", "creative.contextual_multi_ads", "creative.object_id", "creative.call_to_action", "creative.image_crops", "creative.portrait_customizations", "creative.categorization_criteria", "creative.link_url", "creative.platform_customizations", "creative.adlabels", "conversion_domain", "adlabels", "creative_asset_groups_spec", "execution_options"],
       },
     },
     {
@@ -202,7 +205,7 @@ export const ENDPOINTS: EndpointTable = {
       kind: "create", refine: null, no_campaign: true, account_limit: "by-keys",
       roles: [], validate_only: "documented", creative_bearing: "always",
       keys: {
-        "no-campaign-create": ["name", "object_story_spec", "object_story_id", "source_instagram_media_id", "instagram_user_id", "asset_feed_spec", "url_tags", "degrees_of_freedom_spec", "contextual_multi_ads", "object_id", "call_to_action", "image_crops", "interactive_components_spec", "portrait_customizations", "categorization_criteria", "link_url", "platform_customizations", "adlabels", "execution_options"],
+        "no-campaign-create": ["name", "object_story_spec", "object_story_id", "source_instagram_media_id", "instagram_user_id", "asset_feed_spec", "url_tags", "degrees_of_freedom_spec", "contextual_multi_ads", "object_id", "call_to_action", "image_crops", "portrait_customizations", "categorization_criteria", "link_url", "platform_customizations", "adlabels", "creative_sourcing_spec", "execution_options"],
       },
     },
     {
@@ -290,7 +293,7 @@ export const ENDPOINTS: EndpointTable = {
       keys: {
         "pause": ["status", "execution_options"],
         "delete": ["status", "execution_options"],
-        "edit": ["name", "creative", "creative.creative_id", "creative.name", "creative.object_story_spec", "creative.object_story_id", "creative.source_instagram_media_id", "creative.instagram_user_id", "creative.asset_feed_spec", "creative.url_tags", "creative.degrees_of_freedom_spec", "creative.contextual_multi_ads", "creative.object_id", "creative.call_to_action", "creative.image_crops", "creative.interactive_components_spec", "creative.portrait_customizations", "creative.categorization_criteria", "creative.link_url", "creative.platform_customizations", "creative.adlabels", "execution_options"],
+        "edit": ["name", "creative", "creative.creative_id", "creative.name", "creative.object_story_spec", "creative.object_story_id", "creative.source_instagram_media_id", "creative.instagram_user_id", "creative.asset_feed_spec", "creative.url_tags", "creative.degrees_of_freedom_spec", "creative.contextual_multi_ads", "creative.object_id", "creative.call_to_action", "creative.image_crops", "creative.portrait_customizations", "creative.categorization_criteria", "creative.link_url", "creative.platform_customizations", "creative.adlabels", "execution_options"],
         "activation": ["status", "execution_options"],
       },
     },
@@ -544,6 +547,9 @@ export const ENDPOINTS: EndpointTable = {
     promoted_object: ["page_id", "pixel_id", "custom_event_type"],
     lookalike_spec: ["ratio", "country", "type"],
     objectives: ["name", "type", "is_primary", "adspixels.id", "adspixels.event_names"],
+    creative_asset_groups_spec: ["groups.images.hash", "groups.videos.video_id", "groups.texts.text", "groups.texts.text_type", "groups.call_to_action.type", "groups.call_to_action.value.link"],
+    cells: ["name", "treatment_percentage", "control_percentage", "adsets", "campaigns", "id"],
+    creative_sourcing_spec: ["site_links_spec.site_link_title", "site_links_spec.site_link_url", "site_links_spec.site_link_image_hash"],
   },
 };
 
@@ -562,6 +568,23 @@ export function matchEndpoint(method: string, path: string, objectType: ObjectTy
     if (new RegExp(`^(/v\\d+\\.\\d+)?${pattern}$`).test(path)) return row;
   }
   return null;
+}
+
+/** The video upload host (contract 1.1 §2, C14): it takes only the `host_rows` rows, `POST /act_{id}/advideos`. */
+export const VIDEO_HOST = "graph-video.facebook.com";
+
+/**
+ * Contract §2 (1.1, C14), the fake's `hostAllowed` on `ENDPOINTS`: whether the client may send this request to this
+ * host. A host outside `host_list`: never. A host without `host_rows`: any request. Otherwise only a request matching
+ * one of its rows (matched with object type `video`, so a GET matches none). `host` is the URL's `host`, port
+ * included, matched exactly.
+ */
+export function hostAllowed(method: string, host: string, path: string): boolean {
+  if (!ENDPOINTS.host_list.includes(host)) return false;
+  const only = ENDPOINTS.host_rows[host];
+  if (!only) return true;
+  const row = matchEndpoint(method, path, "video");
+  return row !== null && only.includes(row.id);
 }
 
 const INLINE_POST_FIELDS: readonly string[] = ["source_instagram_media_id", "object_story_id"];
@@ -668,7 +691,10 @@ const CREATIVE_KEYS: readonly string[] = [
   ),
 ].filter((k) => k !== "creative_id");
 
-/** Contract §5's creative keys left out of every key set: read, so admittedCreativeSpec sees and refuses them. */
+/**
+ * Contract §5's creative keys left out of every key set: read, so admittedCreativeSpec sees and refuses them.
+ * `interactive_components_spec` left the key sets at 1.1 (C10) and is still read (C12: §3.3 and §5 name it).
+ */
 const LEFT_OUT_CREATIVE_KEYS = [
   "branded_content",
   "facebook_branded_content",
@@ -676,6 +702,7 @@ const LEFT_OUT_CREATIVE_KEYS = [
   "product_set_id",
   "template_url_spec",
   "applink_treatment",
+  "interactive_components_spec",
   "creative_sourcing_spec",
   "destination_spec",
   "wamo_whatsapp_identity_spec",

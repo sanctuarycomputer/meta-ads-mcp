@@ -1,0 +1,90 @@
+{
+  "name": "asset-groups-own",
+  "covers": [
+    "asset-groups-own"
+  ],
+  "decided_by": "rule 6",
+  "why": "a PAUSED ad with asset groups on the fork's paths",
+  "for": "both",
+  "brand_status": {
+    "usb": "ready"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000154",
+    "tool": "ads_create_ad",
+    "method": "POST",
+    "path": "/act_9990000000000001/ads",
+    "params_keys": [
+      "name",
+      "adset_id",
+      "status",
+      "creative",
+      "creative.creative_id",
+      "creative_asset_groups_spec",
+      "creative_asset_groups_spec.groups.images.hash",
+      "creative_asset_groups_spec.groups.videos.video_id",
+      "creative_asset_groups_spec.groups.texts.text",
+      "creative_asset_groups_spec.groups.texts.text_type",
+      "creative_asset_groups_spec.groups.call_to_action.type",
+      "creative_asset_groups_spec.groups.call_to_action.value.link"
+    ],
+    "ad_account": "act_9990000000000001",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "ad",
+      "id": null,
+      "created": true
+    },
+    "status": {
+      "before": null,
+      "after": "PAUSED"
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [
+      {
+        "id": "9994000000001540",
+        "account_id": "act_9990000000000001",
+        "created": false,
+        "role": "parent",
+        "spend_cap_minor_before": 100000,
+        "spend_cap_minor_after": 100000,
+        "name": "sb-usb-h1",
+        "status_after": "ACTIVE",
+        "buying_type": "AUCTION"
+      }
+    ],
+    "identity": [
+      {
+        "field": "object_story_spec.page_id",
+        "via": "creative_id",
+        "id": "9991000000000001",
+        "owner_page": "9991000000000001",
+        "owner_ig": null
+      }
+    ],
+    "kind": "create",
+    "account_limit": false,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": true,
+    "reason": "allowed: a PAUSED ad with asset groups on the fork's paths",
+    "basis": "non-spending",
+    "receipt": "fake-receipt-asset-groups-own"
+  },
+  "reason_has": []
+}
