@@ -376,7 +376,7 @@ describe("registerBulkAdTools", () => {
       expect("status" in (tool.schema as Record<string, unknown>)).toBe(false);
     });
 
-    it("sends the chosen status when creating the ad", async () => {
+    it("sends status PAUSED when creating the ad", async () => {
       const tool = handlerFor("ads_bulk_create_video_ads");
 
       const fetchMock = vi

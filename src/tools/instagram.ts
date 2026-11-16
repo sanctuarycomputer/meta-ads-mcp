@@ -115,7 +115,7 @@ export function registerInstagramTools(server: McpServer): void {
       description:
         `${WRITE_WARNING}Turn an existing organic Instagram post into an ad: a creative made from the post (its media and caption) ` +
         "and an ad in the given ad set, created PAUSED. Checks first that the ad set belongs to the account and that Meta lets the post be boosted. " +
-        "Advantage+ AI features stay off. Activating the ad is a separate, confirmed step (ads_activate_entity). " +
+        "Advantage+ AI features stay off. Activating the ad is a separate, confirmed step (ads_update_ad status ACTIVE, which the spend guard checks). " +
         "Find posts with ads_get_instagram_media and the Instagram account with ads_get_instagram_account.",
       inputSchema: {
         account_id: z.string().describe("Ad account ID (with or without 'act_' prefix)"),
@@ -231,7 +231,7 @@ export function registerInstagramTools(server: McpServer): void {
               content: [{
                 type: "text",
                 text: `Meta's answer was lost, but the ad exists: ${described(found)}, PAUSED. ` +
-                  "Confirm with the human before activating it with ads_activate_entity.",
+                  "Confirm with the human before activating it with ads_update_ad status ACTIVE.",
               }],
             };
           }
@@ -260,7 +260,7 @@ export function registerInstagramTools(server: McpServer): void {
           text: `Boosted Instagram post ${media}: ad ${ad.id} in ad set ${adSet}, PAUSED, ` +
             (creativeId ? `with creative ${creativeId}. ` : "its creative could not be read back (ads_get_ad_details shows it). ") +
             "Do not call ads_boost_ig_post again for this post and ad set: Meta can take minutes to list the new ad, and a second call before then would make another. " +
-            "Confirm with the human before activating it with ads_activate_entity.",
+            "Confirm with the human before activating it with ads_update_ad status ACTIVE.",
         }],
       };
     },

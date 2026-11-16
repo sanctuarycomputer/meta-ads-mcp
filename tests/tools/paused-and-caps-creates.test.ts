@@ -125,11 +125,14 @@ describe("266: single-request creates always send PAUSED", () => {
       [/\/9001$/, { id: "9001", creative: { id: "4001" } }],
       [/\/1784$/, { id: "1784", media_type: "IMAGE", media_product_type: "FEED", boost_eligibility_info: { eligible_to_boost: true } }],
     ]);
-    await toolOf(registerInstagramTools, "ads_boost_ig_post").handler({
+    const result = await toolOf(registerInstagramTools, "ads_boost_ig_post").handler({
       account_id: "123", ad_set_id: "2001", instagram_media_id: "1784", instagram_account_id: "1780", status: "ACTIVE",
     });
     const [body] = postsTo(/\/act_123\/ads$/);
     expect(body.get("status")).toBe("PAUSED");
+    expect(text(result)).toContain("PAUSED");
+    expect(text(result)).toContain("ads_update_ad status ACTIVE");
+    expect(text(result)).not.toContain("ads_activate_entity");
   });
 
   describe("create schemas have no status input", () => {

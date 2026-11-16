@@ -466,7 +466,7 @@ export function registerAdTools(server: McpServer): void {
         fields: "adset{id,is_dynamic_creative}",
       });
       if (ad.adset?.is_dynamic_creative) {
-        throw new Error(`Ad ${id} belongs to dynamic-creative ad set ${ad.adset.id}, and Meta does not allow deleting such an ad on its own (subcode 1340029). Delete the ad set with ads_delete_ad_set, or pause it with ads_activate_entity.`);
+        throw new Error(`Ad ${id} belongs to dynamic-creative ad set ${ad.adset.id}, and Meta does not allow deleting such an ad on its own (subcode 1340029). Delete the ad set with ads_delete_ad_set, or pause it with ads_update_ad_set status PAUSED.`);
       }
       await metaApiClient.postForm<{ success: boolean }>(`/${id}`, {
         status: "DELETED",
