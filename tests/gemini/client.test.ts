@@ -1,8 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  GeminiApiError,
-  buildGenerateBody,
-  createGeminiClient,
   maskGeminiKey,
   scrubGeminiKey,
   validateGeminiKeyInput,
@@ -52,72 +49,3 @@ describe("scrubGeminiKey / maskGeminiKey", () => {
   });
 });
 
-describe("buildGenerateBody", () => {
-  const base = {
-    prompt: "Analyze this ad.",
-    systemInstruction: "You are an ad analyst.",
-    schema: { type: "object", properties: { summary: { type: "string" } } },
-    mediaResolution: "MEDIA_RESOLUTION_LOW" as const,
-    maxOutputTokens: 4096,
-  };
-
-  it("references an uploaded file, puts the text after the video and asks for schema-bound JSON", () => {
-    const body = buildGenerateBody({ ...base, video: { kind: "file", fileUri: "https://generativelanguage.googleapis.com/v1beta/files/abc-123", mimeType: "video/mp4" } });
-    expect(body).toEqual({
-      systemInstruction: { parts: [{ text: "You are an ad analyst." }] },
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { fileData: { fileUri: "https://generativelanguage.googleapis.com/v1beta/files/abc-123", mimeType: "video/mp4" } },
-            { text: "Analyze this ad." },
-          ],
-        },
-      ],
-      generationConfig: {
-        responseMimeType: "application/json",
-        responseJsonSchema: base.schema,
-        mediaResolution: "MEDIA_RESOLUTION_LOW",
-        maxOutputTokens: 4096,
-        temperature: 0.2,
-      },
-    });
-  });
-
-  it("embeds a small video as inlineData", () => {
-    const body = buildGenerateBody({ ...base, video: { kind: "inline", data: Buffer.from("mp4bytes"), mimeType: "video/mp4" } }) as {
-      contents: Array<{ parts: Array<Record<string, unknown>> }>;
-    };
-    expect(body.contents[0].parts[0]).toEqual({ inlineData: { mimeType: "video/mp4", data: Buffer.from("mp4bytes").toString("base64") } });
-  });
-
-  it("can drop the schema for the one-shot fallback while still asking for JSON", () => {
-    const body = buildGenerateBody({ ...base, video: { kind: "inline", data: Buffer.from("x"), mimeType: "video/mp4" } }, { withSchema: false }) as {
-      generationConfig: Record<string, unknown>;
-    };
-    expect(body.generationConfig.responseMimeType).toBe("application/json");
-    expect(body.generationConfig).not.toHaveProperty("responseJsonSchema");
-  });
-});
-
-describe("GeminiClient", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("scrubs the key out of transport errors", async () => {
-    const client = createGeminiClient({ fetch: vi.fn(async () => { throw new Error(`connect failed for key ${KEY}`); }) as never });
-    const error = (await client.validateKey(KEY).catch((e: unknown) => e)) as Error;
-    expect(error.message).not.toContain(KEY);
-  });
-});
-
-describe("round-1 review fixes (client)", () => {
-
-  it("carries no file name when the failure happened before any byte was sent", async () => {
-    const fetchMock = vi.fn().mockRejectedValueOnce(new Error("offline"));
-    const client = createGeminiClient({ fetch: fetchMock as never });
-    const error = (await client.uploadFile({ key: KEY, data: Buffer.from("x"), mimeType: "video/mp4", displayName: "ad-video" }).catch((e: unknown) => e)) as GeminiApiError & { fileName?: string };
-    expect(error.fileName).toBeUndefined();
-  });
-});

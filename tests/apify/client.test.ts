@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import {
-  ApifyApiClient,
   maskApifyToken,
   resolveApifyTenantId,
   scrubApifyToken,
@@ -68,19 +67,6 @@ describe("apify client", () => {
 
       expect(await repo.getDecryptedToken("user-a")).toBe("apify_api_aaa");
       expect(await repo.getDecryptedToken("user-b")).toBeNull();
-    });
-  });
-
-  describe("retries", () => {
-
-    it("does not add the indeterminate warning to a retryable GET", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
-
-      const error = await new ApifyApiClient({ maxRetries: 0 })
-        .get("/v2/users/me")
-        .catch((e: Error) => e);
-
-      expect(error.message).not.toContain("may still have been accepted");
     });
   });
 

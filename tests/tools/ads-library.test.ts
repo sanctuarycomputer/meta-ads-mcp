@@ -159,6 +159,17 @@ describe("ads_library_* tools", () => {
 
   describe("ads_library_delete_apify_token", () => {
 
+    it("deletes a stored token", async () => {
+      await repo.saveToken("_local", TOKEN, null);
+
+      const result = await setup().byName("ads_library_delete_apify_token")({});
+
+      expect(result.isError).toBeUndefined();
+      expect(await repo.getDecryptedToken("_local")).toBeNull();
+      // 254 M7: there is no env fallback to mention any more.
+      expect(result.content[0].text).not.toContain("environment fallback is still active");
+    });
+
     it("errors when there is nothing to delete", async () => {
       const result = await setup().byName("ads_library_delete_apify_token")({});
       expect(result.isError).toBe(true);

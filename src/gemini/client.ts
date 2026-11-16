@@ -4,7 +4,8 @@ import { resolveTenantId } from "../auth/tenant.js";
  * 254 M7: Gemini is removed from this fork. The module keeps the names and
  * types other files import, and every path that would send a request (or
  * resolve a key to send one) throws GeminiRemovedError before any I/O.
- * GEMINI_API_KEY, GEMINI_MODEL and registered keys are never read.
+ * GEMINI_API_KEY, GEMINI_MODEL and registered keys are never read; the request
+ * builders and constants nothing imports are deleted.
  */
 export class GeminiRemovedError extends Error {
   constructor() {
@@ -13,18 +14,8 @@ export class GeminiRemovedError extends Error {
   }
 }
 
-export const GEMINI_HOST = "generativelanguage.googleapis.com";
-
-export const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
-const DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
-
 export type GeminiMediaResolution = "MEDIA_RESOLUTION_LOW" | "MEDIA_RESOLUTION_MEDIUM" | "MEDIA_RESOLUTION_HIGH";
 export type GeminiKeySource = "encrypted_user_storage" | "env";
-
-/** 254 M7: no env read; the model name is only ever reported, never used. */
-export function resolveGeminiModel(_env?: NodeJS.ProcessEnv): string {
-  return DEFAULT_GEMINI_MODEL;
-}
 
 const KEY_SHAPES = /AQ\.[A-Za-z0-9_.-]{10,}|AIza[0-9A-Za-z_-]{10,}/g;
 
@@ -104,29 +95,6 @@ export interface GenerateBodyInput {
   maxOutputTokens?: number;
 }
 
-/**
- * The whole generateContent request shape lives here, under a unit test, so a
- * change in the API touches one function. The text part goes after the video,
- * as Google recommends for single-media prompts.
- */
-export function buildGenerateBody(input: GenerateBodyInput, options: { withSchema?: boolean } = {}): Record<string, unknown> {
-  const videoPart =
-    input.video.kind === "file"
-      ? { fileData: { fileUri: input.video.fileUri, mimeType: input.video.mimeType } }
-      : { inlineData: { mimeType: input.video.mimeType, data: input.video.data.toString("base64") } };
-  return {
-    systemInstruction: { parts: [{ text: input.systemInstruction }] },
-    contents: [{ role: "user", parts: [videoPart, { text: input.prompt }] }],
-    generationConfig: {
-      responseMimeType: "application/json",
-      ...(options.withSchema === false ? {} : { responseJsonSchema: input.schema }),
-      mediaResolution: input.mediaResolution,
-      maxOutputTokens: input.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
-      temperature: 0.2,
-    },
-  };
-}
-
 export interface GeminiFile {
   name: string;
   uri: string;
@@ -164,12 +132,6 @@ export interface GeminiClient {
   deleteFile(input: { key: string; name: string }): Promise<boolean>;
 }
 
-export interface GeminiClientConfig {
-  fetch?: typeof fetch;
-  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
-  now?: () => number;
-}
-
 /** 254 M7: refuses; no key is looked up. */
 export async function resolveGeminiKey(): Promise<ResolvedGeminiKey> {
   throw new GeminiRemovedError();
@@ -184,8 +146,8 @@ const removedClient: GeminiClient = {
   deleteFile: () => Promise.resolve(false),
 };
 
-/** 254 M7: the config (an injected fetch included) is ignored. */
-export function createGeminiClient(_config: GeminiClientConfig = {}): GeminiClient {
+/** 254 M7: takes no configuration (there is no fetch to inject); every method refuses. */
+export function createGeminiClient(): GeminiClient {
   return removedClient;
 }
 
