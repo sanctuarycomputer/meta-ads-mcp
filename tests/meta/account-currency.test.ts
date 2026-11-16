@@ -7,7 +7,7 @@ import {
 } from "../../src/meta/account-currency.js";
 import { requestContext } from "../../src/auth/token-store.js";
 import { tokenManager } from "../../src/auth/token-manager.js";
-import { cleanupTestToken, mockFetchResponse, setupTestToken } from "../setup.js";
+import { bearerTokenOf, cleanupTestToken, mockFetchResponse, setupTestToken } from "../setup.js";
 
 const metaError = () =>
   mockFetchResponse({ error: { code: 100, type: "OAuthException", message: "Unsupported get request." } }, { status: 400 });
@@ -80,8 +80,8 @@ describe("account currency lookup", () => {
 
     const url = new URL(String(vi.mocked(fetch).mock.calls[0][0]));
     expect(`${url.origin}${url.pathname}`).toBe(`https://graph.facebook.com/${metaApiClient.apiVersion}/act_123`);
-    expect([...url.searchParams.keys()].sort()).toEqual(["access_token", "fields"]);
-    expect(url.searchParams.get("access_token")).toBe("tenant-a-token");
+    expect([...url.searchParams.keys()].sort()).toEqual(["appsecret_proof", "fields"]);
+    expect(bearerTokenOf(vi.mocked(fetch).mock.calls[0][1])).toBe("tenant-a-token");
   });
 
   it("keeps accounts apart", async () => {
@@ -104,7 +104,7 @@ describe("account currency lookup", () => {
     });
 
     expect(fetch).toHaveBeenCalledTimes(2);
-    const tokens = vi.mocked(fetch).mock.calls.map(([url]) => new URL(String(url)).searchParams.get("access_token"));
+    const tokens = vi.mocked(fetch).mock.calls.map(([, init]) => bearerTokenOf(init));
     expect(tokens).toEqual(["tenant-a-token", "tenant-b-token"]);
 
     await requestContext.run({ accessToken: "tenant-a-token" }, async () => {
@@ -222,7 +222,7 @@ describe("account currency lookup", () => {
       await requestContext.run({ accessToken: "tenant-a-token" }, async () => {
         await expect(read("tenant-b-token")).resolves.toEqual({ currency: "COP" });
       });
-      expect(new URL(String(vi.mocked(fetch).mock.calls[0][0])).searchParams.get("access_token")).toBe("tenant-b-token");
+      expect(bearerTokenOf(vi.mocked(fetch).mock.calls[0][1])).toBe("tenant-b-token");
     });
 
     it("abstains, without a request, while the rate limiter would make the client wait", async () => {

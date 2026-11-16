@@ -28,7 +28,10 @@ export function resolveMetaApiVersion(): string {
   if (!VERSION_PATTERN.test(configured)) {
     throw new Error(`META_API_VERSION must be ${DEFAULT_META_API_VERSION}, got "${configured}".`);
   }
-  return assertMetaApiVersion(configured);
+  if (configured !== DEFAULT_META_API_VERSION) {
+    throw new Error(`META_API_VERSION must be ${DEFAULT_META_API_VERSION}, got "${configured}": this server runs only on ${DEFAULT_META_API_VERSION}.`);
+  }
+  return configured;
 }
 
 // Compares any two versions, old ones included: targeting rules name the

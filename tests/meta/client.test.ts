@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { MetaApiClient } from "../../src/meta/client.js";
-import { setupTestToken, cleanupTestToken, mockFetchResponse } from "../setup.js";
+import { setupTestToken, cleanupTestToken, mockFetchResponse, bearerTokenOf } from "../setup.js";
 import { tokenManager } from "../../src/auth/token-manager.js";
 import { hashToken, requestContext } from "../../src/auth/token-store.js";
 import { logger } from "../../src/utils/logger.js";
@@ -129,7 +129,9 @@ describe("MetaApiClient", () => {
       const url = new URL(vi.mocked(fetch).mock.calls[0][0] as string);
       expect(url.pathname).toBe("/v27.0/123");
       expect(url.searchParams.get("fields")).toBe("id,name");
-      expect(url.searchParams.get("access_token")).toBe("test-access-token");
+      expect(url.searchParams.has("access_token")).toBe(false);
+      expect(url.searchParams.get("appsecret_proof")).toMatch(/^[0-9a-f]{64}$/);
+      expect(bearerTokenOf(vi.mocked(fetch).mock.calls[0][1])).toBe("test-access-token");
     });
 
     it("omits undefined params", async () => {

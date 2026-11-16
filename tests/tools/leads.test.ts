@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { registerLeadTools } from "../../src/tools/leads.js";
-import { createMockMcpServer, setupTestToken, cleanupTestToken, mockFetchResponse } from "../setup.js";
+import { createMockMcpServer, setupTestToken, cleanupTestToken, mockFetchResponse, bearerTokenOf } from "../setup.js";
 
 describe("registerLeadTools", () => {
   beforeEach(() => {
@@ -280,6 +280,6 @@ function callSummary(): string[] {
 }
 
 function tokenOf(call: number): string | null {
-  const [url, init] = vi.mocked(fetch).mock.calls[call];
-  return new URL(String(url)).searchParams.get("access_token") ?? new URLSearchParams(String(init?.body ?? "")).get("access_token");
+  const [, init] = vi.mocked(fetch).mock.calls[call];
+  return bearerTokenOf(init);
 }

@@ -40,6 +40,7 @@ describe("resolveMetaApiVersion", () => {
   it.each(REFUSED)("refuses META_API_VERSION=%s, a version other than v27.0", (value) => {
     vi.stubEnv("META_API_VERSION", value);
     expect(() => resolveMetaApiVersion()).toThrow(/v27\.0/);
+    expect(() => resolveMetaApiVersion()).toThrow(/META_API_VERSION/);
   });
 
   it.each(REFUSED)("refuses %s as a client version", (value) => {

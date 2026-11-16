@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerRateStatusTools } from "../../src/tools/rate-status.js";
 import { metaApiClient } from "../../src/meta/client.js";
 import { hashToken, requestContext } from "../../src/auth/token-store.js";
-import { createMockMcpServer, mockFetchResponse } from "../setup.js";
+import { TEST_APP_SECRET, createMockMcpServer, mockFetchResponse } from "../setup.js";
 
 type TextResult = { content: Array<{ type: string; text: string }> };
 
@@ -28,10 +28,12 @@ async function callMeta(token: string, account: string, response: Response) {
 // state; a tenant sees only its own token's.
 describe("ads_rate_status", () => {
   beforeEach(() => {
+    process.env.META_APP_SECRET = TEST_APP_SECRET;
     metaApiClient.resetForTests();
   });
 
   afterEach(() => {
+    delete process.env.META_APP_SECRET;
     metaApiClient.resetForTests();
     vi.restoreAllMocks();
   });

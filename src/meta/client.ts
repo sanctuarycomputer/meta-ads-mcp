@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { getAccessToken, hashToken } from "../auth/token-store.js";
 import { logger } from "../utils/logger.js";
@@ -45,6 +46,30 @@ interface RequestScope {
   // The request carries personal data, which Meta's error text can quote:
   // only Meta's code and subcode are logged and returned.
   withholdMessage?: boolean;
+}
+
+// The app secret, trimmed as every reader of it trims. Without it no Graph
+// request is sent: Meta can only tell a stolen token from ours by the proof.
+function requireAppSecret(): string {
+  const secret = process.env.META_APP_SECRET?.trim();
+  if (!secret) {
+    throw new Error("META_APP_SECRET is not set: every Graph request must carry appsecret_proof.");
+  }
+  return secret;
+}
+
+/**
+ * Signs one Graph request (fork review M1, M2): sets `appsecret_proof`, the
+ * HMAC-SHA256 of the token keyed by the app secret, on `url`, removes any
+ * `access_token` from it, and returns the header that carries the token.
+ * The token is never put in a query or a body. Throws, before anything is
+ * sent, when META_APP_SECRET is missing.
+ */
+export function signGraphRequest(url: URL, token: string): { Authorization: string } {
+  const secret = requireAppSecret();
+  url.searchParams.delete("access_token");
+  url.searchParams.set("appsecret_proof", createHmac("sha256", secret).update(token).digest("hex"));
+  return { Authorization: `Bearer ${token}` };
 }
 
 // An error whose text was written here, with nothing of the request or the
@@ -110,6 +135,10 @@ export class MetaApiClient {
     this.baseUrl = config?.baseUrl ?? DEFAULT_BASE_URL;
     this.timeout = config?.timeout ?? DEFAULT_TIMEOUT;
     this.maxRetries = config?.maxRetries ?? MAX_RETRIES;
+    // A server given its token must also be given the secret to sign with,
+    // or it doesn't start. Only the env is read here: asking the token store
+    // would load the token registry as a side effect of construction.
+    if (process.env.META_ACCESS_TOKEN?.trim()) requireAppSecret();
   }
 
   async get<T>(
@@ -118,7 +147,7 @@ export class MetaApiClient {
     scope?: RequestScope,
   ): Promise<T> {
     const url = this.buildUrl(path, params);
-    return this.execute<T>("GET", url, path, undefined, false, scope);
+    return this.execute<T>("GET", url, path, undefined, scope);
   }
 
   async post<T>(
@@ -145,7 +174,7 @@ export class MetaApiClient {
     return this.execute<T>("POST", url, path, {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: formBody.toString(),
-    }, false, scope);
+    }, scope);
   }
 
   async postMultipart<T>(
@@ -153,9 +182,9 @@ export class MetaApiClient {
     formData: FormData,
   ): Promise<T> {
     const url = this.buildUrl(path);
-    const token = getAccessToken();
-    formData.set("access_token", token);
-    return this.execute<T>("POST", url, path, { body: formData }, true);
+    // The token travels only in the header.
+    formData.delete("access_token");
+    return this.execute<T>("POST", url, path, { body: formData });
   }
 
   async delete<T>(
@@ -164,7 +193,7 @@ export class MetaApiClient {
     scope?: RequestScope,
   ): Promise<T> {
     const url = this.buildUrl(path, params);
-    return this.execute<T>("DELETE", url, path, undefined, false, scope);
+    return this.execute<T>("DELETE", url, path, undefined, scope);
   }
 
   async getPaginated<T>(
@@ -206,7 +235,15 @@ export class MetaApiClient {
     if (this.circuitBreaker.isOpen({ tokenHash, accountId, type: guessBucType("GET", path) })) return undefined;
     if (this.rateLimiter.getThrottleDelay({ tokenHash, accountId }) > 0) return undefined;
 
-    const response = await fetch(this.appendToken(this.buildUrl(path, params), token), { method: "GET", signal });
+    const url = new URL(this.buildUrl(path, params));
+    let auth: { Authorization: string };
+    try {
+      auth = signGraphRequest(url, token);
+    } catch {
+      logger.debug({ event: "meta_detached_unsigned", path }, "Detached read not sent: META_APP_SECRET is not set");
+      return undefined;
+    }
+    const response = await fetch(url.toString(), { method: "GET", signal, redirect: "error", headers: auth });
     const body = (await response.json()) as unknown;
     if (!response.ok || isMetaApiError(body)) return undefined;
     return body as T;
@@ -268,10 +305,14 @@ export class MetaApiClient {
     url: string,
     path: string,
     options?: RequestInit,
-    skipTokenParam = false,
     scope?: RequestScope,
   ): Promise<T> {
     const token = getAccessToken();
+    // Signed before anything else: without the secret nothing is sent, and
+    // no pacing or limiter state changes.
+    const signedUrl = new URL(url);
+    const auth = signGraphRequest(signedUrl, token);
+    const reqUrl = signedUrl.toString();
     const tokenHash = hashToken(token);
     const accountId = scope?.accountId ?? extractAccountId(path);
     const context: RequestContext = { tokenHash, accountId };
@@ -301,8 +342,6 @@ export class MetaApiClient {
 
     // Reactive self-throttle based on last-known usage headers.
     await beforeSending(this.rateLimiter.waitIfNeeded(context));
-
-    const reqUrl = skipTokenParam ? url : this.appendToken(url, token);
 
     // POST to /act_<id>/<collection> creates new resources without native
     // idempotency on Meta's side — retrying a timeout/5xx/network error can
@@ -339,6 +378,8 @@ export class MetaApiClient {
         const response = await fetch(reqUrl, {
           method,
           ...options,
+          headers: { ...(options?.headers as Record<string, string> | undefined), ...auth },
+          redirect: "error",
           signal: controller.signal,
         });
 
@@ -448,12 +489,6 @@ export class MetaApiClient {
 
     logger.error({ error: lastError, path }, "All retries exhausted");
     throw lastError ?? new Error("Request failed after retries");
-  }
-
-  private appendToken(url: string, token: string): string {
-    const u = new URL(url);
-    u.searchParams.set("access_token", token);
-    return u.toString();
   }
 
   private async backoff(attempt: number): Promise<void> {

@@ -10,6 +10,7 @@ import { tokenManager } from "../../src/auth/token-manager.js";
 import {
   createMockMcpServer,
   setupTestToken,
+  bearerTokenOf,
   cleanupTestToken,
   mockFetchResponse,
   stubWriteAndCurrencyLookup,
@@ -484,7 +485,7 @@ describe("registerCampaignTools", () => {
       /** Every request so far as "METHOD /path token". */
       const requests = () => vi.mocked(fetch).mock.calls.map(([url, init]) => {
         const parsed = new URL(String(url));
-        return `${init?.method ?? "GET"} ${parsed.pathname.replace(/^\/v[\d.]+/, "")} ${parsed.searchParams.get("access_token")}`;
+        return `${init?.method ?? "GET"} ${parsed.pathname.replace(/^\/v[\d.]+/, "")} ${bearerTokenOf(init)}`;
       });
 
       /** Answers each GET according to the token it carries; every POST succeeds. */
@@ -494,7 +495,7 @@ describe("registerCampaignTools", () => {
           const parsed = new URL(url);
           const path = parsed.pathname.replace(/^\/v[\d.]+/, "");
           onGet?.(path);
-          return answers[parsed.searchParams.get("access_token") ?? ""]?.(path) ?? refused();
+          return answers[bearerTokenOf(init) ?? ""]?.(path) ?? refused();
         }));
       };
 
