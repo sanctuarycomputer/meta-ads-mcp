@@ -99,6 +99,13 @@ const BASE_CASES: Array<[string, string]> = [
   ["https://evil.example", "the host evil.example is not on the host list"],
   ["https://graph.facebook.com:444", "the base URL has a port"],
   ["https://u@graph.facebook.com", "the base URL has userinfo"],
+  // What is checked is what the URL is built from (T5-3): the origin itself, nothing after it.
+  ["https://graph.facebook.com/", "the base URL is not exactly https:// and its host"],
+  ["https://graph.facebook.com/x", "the base URL is not exactly https:// and its host"],
+  ["https://graph.facebook.com?", "the base URL is not exactly https:// and its host"],
+  ["https://graph.facebook.com#", "the base URL is not exactly https:// and its host"],
+  ["https://graph.facebook.com:443", "the base URL is not exactly https:// and its host"],
+  ["https://GRAPH.facebook.com", "the base URL is not exactly https:// and its host"],
 ];
 
 for (const readOnly of [false, true]) {
@@ -158,6 +165,12 @@ describe("read server (META_ADS_READ_ONLY=1)", () => {
     ["postForm", "POST", "/act_1/campaigns"],
     ["delete", "DELETE", "/1"],
     ["postForm", "POST", "/1/copies"],
+    // Only an account or a numeric id directly followed by /insights is the report edge.
+    ["postForm", "POST", "/act_1/insights_x"],
+    ["post", "POST", "/act_1/insights/foo"],
+    ["postForm", "POST", "/me/insights"],
+    ["postForm", "POST", "/1_2/insights"],
+    ["delete", "DELETE", "/act_1/insights"],
   ] as const)("%s %s %s is refused before any GET", async (m, method, path) => {
     expect(await refusalOf(clientAt(), m, path, { name: "x" })).toBe(
       refused(`this server is read-only: ${method} ${path} is neither a GET nor an insights report`),

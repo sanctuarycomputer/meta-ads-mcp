@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { MetaApiClient } from "../../src/meta/client.js";
+import { MetaApiClient, metaApiClient } from "../../src/meta/client.js";
 import { withPageToken } from "../../src/meta/page-token.js";
 import * as wd from "../../src/meta/write-descriptor.js";
 import { matchEndpoint, type Descriptor } from "../../src/meta/write-descriptor.js";
@@ -16,7 +16,8 @@ import { registerAudienceTools } from "../../src/tools/audiences.js";
 import { hashToken } from "../../src/auth/token-store.js";
 import { loadFixtures } from "../fixtures/meta-ads-guard/fake-guard.mjs";
 import { accountsOf, answerGet, scenarioFor } from "../fixtures/meta-ads-guard/harness.js";
-import { cleanupTestToken, createMockMcpServer, mockFetchResponse, setupTestToken } from "../setup.js";
+import { TEST_APP_SECRET, cleanupTestToken, createMockMcpServer, mockFetchResponse, setupTestToken } from "../setup.js";
+import { createHmac } from "node:crypto";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const STUBS = join(ROOT, "tests/fixtures/meta-ads-guard/stubs");
@@ -251,17 +252,31 @@ describe("static", () => {
 });
 
 describe("audiences.ts", () => {
-  it("unshares with adaccounts in the query params, and the path passes the check", async () => {
-    onWrite = () => mockFetchResponse({ success: true });
-    const server = createMockMcpServer();
-    registerAudienceTools(server as never);
-    const tool = server._registeredTools.find((t: { name: string }) => t.name === "ads_unshare_custom_audience")!;
-    await tool.handler({ audience_id: "8001", ad_account_ids: ["act_1", "2"] });
+  // The tool's own handler, on the singleton client with the real gate swapped in (T5-2), inside a call context.
+  it("unshares with adaccounts in the query params, through the real gate", async () => {
+    world.set("/8001", { id: "8001", metadata: { type: "customaudience" } });
+    const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: process.env.HOME ?? "/tmp", META_WRITE_GUARD_CMD: stub("record", log) };
+    const singleton = metaApiClient as unknown as { writeGate: unknown };
+    const pass = singleton.writeGate;
+    singleton.writeGate = new RealWriteGate(
+      (path, params) => metaApiClient.get(path, params),
+      new GuardRunner({ env, cwd: ROOT, timeoutMs: 15_000 }),
+    );
+    try {
+      const server = createMockMcpServer();
+      registerAudienceTools(server as never);
+      const tool = server._registeredTools.find((t: { name: string }) => t.name === "ads_unshare_custom_audience")!;
+      await inCall("ads_unshare_custom_audience", () => tool.handler({ audience_id: "8001", ad_account_ids: ["act_1", "2"] })).run;
+    } finally {
+      singleton.writeGate = pass;
+    }
     expect(writes()).toHaveLength(1);
     const [w] = writes();
     expect(w.method).toBe("DELETE");
     expect(w.path).toBe("/8001/adaccounts");
     expect(w.query.get("adaccounts")).toBe('["1","2"]');
+    expect(descriptors()).toEqual([expect.objectContaining({ method: "DELETE", path: "/8001/adaccounts", params_keys: ["adaccounts"] })]);
+    expect(outcomes()).toEqual([expect.objectContaining({ outcome_for: descriptors()[0].request_id, ok: true })]);
   });
 });
 
@@ -430,5 +445,203 @@ describe("P14", () => {
     expect(plain.writeGate).toBeInstanceOf(RealWriteGate);
     expect(plain.writeGate.runner.cwd).toBe("/app");
     expect(plain.writeGate.runner.timeoutMs).toBe(20_000);
+  });
+});
+
+// Contract ruling a-20261116-131104270: one guard call per request_id; a resend reuses the verdict; a refused or
+// failed guard call is never resent and sends nothing.
+describe("the guard is asked once per request_id, above the resend loop", () => {
+  it("a first attempt that fails retryably and a second that succeeds: one guard call, one outcome, one request_id", async () => {
+    vi.spyOn(MetaApiClient.prototype as unknown as { backoff: () => Promise<void> }, "backoff").mockResolvedValue(undefined);
+    onWrite = (_c, n) => (n === 1 ? mockFetchResponse({ message: "busy" }, { status: 503 }) : mockFetchResponse({ success: true }));
+    const client = clientWith(stub("record", log), { maxRetries: 3 });
+    await inCall("ads_update_campaign", () => client.postForm(`/${CAMP}`, { name: "x" })).run;
+    expect(writes()).toHaveLength(2);
+    expect(records()).toHaveLength(2);
+    const [d] = descriptors();
+    expect(outcomes()).toEqual([expect.objectContaining({ outcome_for: d.request_id, ok: true })]);
+  });
+
+  it("a refused guard call sends nothing and is not asked again", async () => {
+    vi.spyOn(MetaApiClient.prototype as unknown as { backoff: () => Promise<void> }, "backoff").mockResolvedValue(undefined);
+    const s = scenarioFor(FIXTURES.find((f: { name: string }) => f.name === "cross-brand__source-ad"));
+    world = s.gets;
+    const cid = [...world.keys()].find((k) => /^\/9997/.test(k))!;
+    world.set(cid, new Error("fake Graph: unreadable"));
+    const client = clientWith(stub("refuse-unresolved", log), { maxRetries: 3 });
+    const { run } = inCall("ads_duplicate_ad", () => client.postForm(s.path, s.params as Record<string, string>), false, accountsOf(s));
+    expect(await refusalOf(run)).toMatch(/^MCP error -32600: write refused: guard denied: /);
+    expect(writes()).toEqual([]);
+    expect(records()).toHaveLength(1);
+  });
+
+  it.each([
+    ["exit", () => stub("exit1"), "guard exit: the guard exited 1"],
+    ["timeout", () => stub("hang"), "guard timeout: no reply in 300 ms (killed, SIGKILL)"],
+  ])("a guard that fails (%s) sends nothing", async (_cls, cmd, detail) => {
+    const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: process.env.HOME ?? "/tmp", META_WRITE_GUARD_CMD: cmd() };
+    const runner = new GuardRunner({ env, cwd: ROOT, timeoutMs: 300 });
+    const decide = vi.spyOn(runner, "decide");
+    const client = new MetaApiClient({ maxRetries: 3, writeGateForTests: (get) => new RealWriteGate(get, runner) });
+    vi.spyOn(MetaApiClient.prototype as unknown as { backoff: () => Promise<void> }, "backoff").mockResolvedValue(undefined);
+    const { run } = inCall("ads_update_campaign", () => client.postForm(`/${CAMP}`, { name: "x" }));
+    expect(await refusalOf(run)).toBe(refused(detail));
+    expect(writes()).toEqual([]);
+    expect(decide).toHaveBeenCalledTimes(1);
+  });
+});
+
+// T5-1 and its sweep: one case each that only its rule decides.
+describe("deciding cases", () => {
+  it.each([
+    ["Execution_Options", '["validate_only"]'],
+    ["EXECUTION_OPTIONS", '["validate_only"]'],
+    ["execution_options[0]", "validate_only"],
+    ["Execution_Options[]", "validate_only"],
+  ])("refuses a caller's %s", async (key, value) => {
+    const client = clientWith(stub("record", log));
+    const { run } = inCall("ads_update_campaign", () => client.postForm(`/${CAMP}`, { name: "x", [key]: value }));
+    expect(await refusalOf(run)).toBe(refused("execution_options is set by the server for validate_only, never by the caller"));
+    expect(calls).toEqual([]);
+    expect(existsSync(log)).toBe(false);
+  });
+
+  it.each([
+    ["a 19-digit integer", '{"object_story_spec":{"page_id":1234567890123456789}}'],
+    ["a 23-digit decimal", '{"object_story_spec":{"link_data":{"name":"x"}},"x":0.12345678901234567890123}'],
+    ["1e999", '{"object_story_spec":{"page_id":1e999}}'],
+  ])("refuses a decoded number that is not sent exactly as written: %s", async (_name, creative) => {
+    const client = clientWith(stub("record", log));
+    const { run } = inCall("ads_create_ad", () => client.postForm(`/${ACT}/ads`, { name: "x", creative }));
+    expect(await refusalOf(run)).toBe(refused("creative holds a number that cannot be sent exactly as written (send ids as strings)"));
+    expect(calls).toEqual([]);
+  });
+
+  it("takes an exact decoded number, safe integers and short decimals", async () => {
+    const client = clientWith(stub("record", log));
+    const creative = '{"object_story_spec":{"page_id":"9991000000000001","link_data":{"name":"x"}},"n":12,"f":0.5}';
+    await inCall("ads_create_ad", () => client.postForm(`/${ACT}/ads`, { name: "x", creative })).run;
+    expect(writes()).toHaveLength(1);
+  });
+
+  it.each([
+    ["postForm", NaN],
+    ["postForm", Infinity],
+    ["post", -Infinity],
+  ] as const)("refuses a non-finite number in %s (%s)", async (m, n) => {
+    const client = clientWith(stub("record", log));
+    const { run } = inCall("ads_update_campaign", () => (m === "post" ? client.post(`/${CAMP}`, { daily_budget: n }) : client.postForm(`/${CAMP}`, { daily_budget: n })));
+    expect(await refusalOf(run)).toBe(refused(`daily_budget holds a number that cannot be sent (${String(n)})`));
+    expect(calls).toEqual([]);
+  });
+
+  const own = (key: string, value: unknown) => Object.fromEntries([[key, value], ["name", "x"]]);
+  it.each(["__proto__", "constructor", "prototype"])("refuses a field named %s in a form, JSON, multipart or nested body", async (name) => {
+    const client = clientWith(stub("record", log));
+    const form = new FormData();
+    form.append(name, "x");
+    form.append("name", "y");
+    const attempts = [
+      () => client.postForm(`/${CAMP}`, own(name, "x") as Record<string, string>),
+      () => client.post(`/${CAMP}`, own(name, 1)),
+      () => client.post(`/${CAMP}`, { name: "x", targeting: JSON.parse(`{"${name}": {"a": 1}}`) }),
+      () => client.postMultipart(`/${CAMP}`, form),
+      () => client.postForm(`/${ACT}/ads`, { name: "x", creative: `{"${name}":{"a":1}}` }),
+      () => client.delete(`/${CAMP}`, own(name, "x") as Record<string, string>),
+    ];
+    for (const attempt of attempts) {
+      const { run } = inCall("ads_update_campaign", attempt);
+      expect(await refusalOf(run)).toBe(refused(`a field named ${name} is not allowed`));
+    }
+    expect(calls).toEqual([]);
+    expect(existsSync(log)).toBe(false);
+  });
+
+  it("scrubs the token and the proof from Meta's answer in ctx.sent", async () => {
+    const token = "test-access-token";
+    const proof = createHmac("sha256", TEST_APP_SECRET).update(token).digest("hex");
+    onWrite = () => mockFetchResponse({ success: true, echo: `${token} ${proof} appsecret_proof=${proof}` });
+    const client = clientWith(stub("record", log));
+    const { ctx, run } = inCall("ads_update_campaign", () => client.postForm(`/${CAMP}`, { name: "x" }));
+    await run;
+    expect(ctx.sent).toHaveLength(1);
+    expect(ctx.sent[0].answer).not.toContain(token);
+    expect(ctx.sent[0].answer).not.toContain(proof);
+    expect(ctx.sent[0].answer).toContain("[REDACTED]");
+  });
+
+  it("scrubs the token and the proof from a thrown error in the outcome and ctx.sent", async () => {
+    const token = "test-access-token";
+    const proof = createHmac("sha256", TEST_APP_SECRET).update(token).digest("hex");
+    type Exec = (this: MetaApiClient, m: string, ...rest: unknown[]) => Promise<unknown>;
+    const proto = MetaApiClient.prototype as unknown as { execute: Exec };
+    const real = proto.execute;
+    vi.spyOn(proto, "execute").mockImplementation(function (this: MetaApiClient, m: string, ...rest: unknown[]) {
+      if (m === "GET") return real.call(this, m, ...rest);
+      return Promise.reject(new Error(`boom ${token} ${proof}`));
+    });
+    const client = clientWith(stub("record", log));
+    const { ctx, run } = inCall("ads_update_campaign", () => client.postForm(`/${CAMP}`, { name: "x" }));
+    await refusalOf(run);
+    const [o] = outcomes();
+    expect(o.ok).toBe(false);
+    for (const text of [String(o.error), ctx.sent[0].answer]) {
+      expect(text).toBe("boom [REDACTED] [REDACTED]");
+    }
+  });
+
+  it("does not list a write that execute refused, and still records its outcome ok:false", async () => {
+    type Exec = (this: MetaApiClient, m: string, ...rest: unknown[]) => Promise<unknown>;
+    const proto = MetaApiClient.prototype as unknown as { execute: Exec };
+    const real = proto.execute;
+    vi.spyOn(proto, "execute").mockImplementation(function (this: MetaApiClient, m: string, ...rest: unknown[]) {
+      if (m === "GET") return real.call(this, m, ...rest);
+      return Promise.reject(new wd.WriteRefusal("late refusal"));
+    });
+    const client = clientWith(stub("record", log));
+    const { ctx, run } = inCall("ads_update_campaign", () => client.postForm(`/${CAMP}`, { name: "x" }));
+    expect(await refusalOf(run)).toBe(refused("late refusal"));
+    expect(ctx.sent).toEqual([]);
+    expect(ctx.refusal).toBe(refused("late refusal"));
+    expect(outcomes()).toEqual([expect.objectContaining({ ok: false, error: refused("late refusal") })]);
+  });
+
+  it("keeps the call's first refusal when a later request is refused too", async () => {
+    const client = clientWith(stub("record", log));
+    const { ctx, run } = inCall("ads_update_campaign", async () => {
+      await refusalOf(client.postForm(`/${CAMP}`, { name: "x", execution_options: "x" }));
+      await refusalOf(client.get(`/${CAMP}`, { method: "DELETE" }));
+    });
+    await run;
+    expect(ctx.refusal).toBe(refused("execution_options is set by the server for validate_only, never by the caller"));
+  });
+
+  it("stops later writes after a validate_only write that Meta refused", async () => {
+    onWrite = () => graphError("invalid");
+    const client = clientWith(stub("record", log));
+    const { ctx, run } = inCall("ads_update_campaign", async () => {
+      await refusalOf(client.postForm(`/${CAMP}`, { name: "x" }));
+      return refusalOf(client.postForm(`/${CAMP}`, { name: "y" }));
+    }, true);
+    expect(await run).toBe(refused("validate_only: later steps need the first write's result and were not sent"));
+    expect(ctx.validateOnlyStop).toBe(true);
+    expect(writes()).toHaveLength(1);
+  });
+
+  it("converts a builder failure that is not a refusal into one", async () => {
+    vi.spyOn(wd, "buildDescriptor").mockRejectedValue(new TypeError("boom\nline"));
+    const client = clientWith(stub("record", log));
+    const { run } = inCall("ads_update_campaign", () => client.postForm(`/${CAMP}`, { name: "x" }));
+    expect(await refusalOf(run)).toBe(refused("the descriptor could not be built: boom line"));
+    expect(writes()).toEqual([]);
+    expect(existsSync(log)).toBe(false);
+  });
+
+  it("post with no body sends none, and under validate_only sends only execution_options", async () => {
+    const client = clientWith(stub("record", log));
+    await inCall("ads_update_campaign", () => client.post(`/${CAMP}`)).run;
+    await inCall("ads_update_campaign", () => client.post(`/${CAMP}`), true).run;
+    expect(writes()[0].init?.body).toBeUndefined();
+    expect(JSON.parse(String(writes()[1].init?.body))).toEqual({ execution_options: ["validate_only"] });
   });
 });

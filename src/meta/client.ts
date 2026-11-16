@@ -55,8 +55,10 @@ const isReadServer = (): boolean => process.env.META_ADS_READ_ONLY === "1";
  * Refuses, with `WriteRefusal`, a request the client never sends on either server (contract §2): a method
  * override or a Graph batch parameter (any case), a repeated multipart name, an `async_batch_requests` segment, a
  * joined path (`/<version><path>`, checked raw, before `new URL` folds it) that is not plain, a base URL that is not
- * https on a listed host with no port or userinfo; and on the read server (`META_ADS_READ_ONLY=1`) any method but
- * GET, except an insights report POST (`ENDPOINTS.read_post`). Nothing it says quotes the path or a value.
+ * https on a listed host with no port or userinfo, or that is not exactly `https://<host>` (what is checked is
+ * what the URL is built from); a field named `__proto__`, `constructor` or `prototype`; and on the read server
+ * (`META_ADS_READ_ONLY=1`) any method but GET, except an insights report POST (`ENDPOINTS.read_post`). Nothing it
+ * says quotes the path or a value.
  */
 export function checkRequestShape(
   method: string,
@@ -65,7 +67,8 @@ export function checkRequestShape(
   params: Readonly<Record<string, unknown>>,
   multipartNames?: readonly string[],
 ): void {
-  for (const key of Object.keys(params)) {
+  for (const key of [...Object.keys(params), ...(multipartNames ?? [])]) {
+    assertFieldName(key);
     const k = key.toLowerCase();
     if (OVERRIDE_NAMES.has(k)) throw new WriteRefusal(`a parameter named ${key} would override the HTTP method`);
     if (BATCH_NAMES.has(k)) throw new WriteRefusal(`a parameter named ${key} is a Graph batch`);
@@ -93,9 +96,8 @@ export function checkRequestShape(
   if (!ENDPOINTS.host_list.includes(base.hostname)) throw new WriteRefusal(`the host ${base.hostname} is not on the host list`);
   if (base.port !== "") throw new WriteRefusal("the base URL has a port");
   if (base.username !== "" || base.password !== "") throw new WriteRefusal("the base URL has userinfo");
-  if ((base.pathname !== "/" && base.pathname !== "") || base.search !== "" || base.hash !== "") {
-    throw new WriteRefusal("the base URL has a path, query or fragment");
-  }
+  // The URL is built by joining this string: it must be the origin itself, with no path, query, fragment or slash.
+  if (baseUrl !== `https://${base.hostname}`) throw new WriteRefusal("the base URL is not exactly https:// and its host");
   if (isReadServer() && method !== "GET" && !(method === "POST" && READ_POST.test(joined))) {
     const path = joined.replace(/^\/v\d+\.\d+/, "");
     throw new WriteRefusal(`this server is read-only: ${method} ${path} is neither a GET nor an insights report`);
@@ -109,11 +111,32 @@ const JSON_FORM_KEYS: ReadonlySet<string> = new Set(["creative", "cells", "objec
 /** The placeholder a multipart file stands as in decoded params. */
 export const MULTIPART_FILE = "<file>";
 
-function hasUnsafeNumber(v: unknown): boolean {
-  if (typeof v === "number") return Number.isInteger(v) && !Number.isSafeInteger(v);
-  if (Array.isArray(v)) return v.some(hasUnsafeNumber);
-  if (v !== null && typeof v === "object") return Object.values(v).some(hasUnsafeNumber);
-  return false;
+// Field names that reach an object's prototype slot: assigned, they vanish from the params or change them.
+const PROTOTYPE_NAMES: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
+
+function assertFieldName(name: string): void {
+  if (PROTOTYPE_NAMES.has(name)) throw new WriteRefusal(`a field named ${name} is not allowed`);
+}
+
+// Every field name at any depth, and every number finite: what is described is what is sent.
+function assertSendable(key: string, v: unknown): void {
+  if (typeof v === "number" && !Number.isFinite(v)) throw new WriteRefusal(`${key} holds a number that cannot be sent (${String(v)})`);
+  if (Array.isArray(v)) for (const item of v) assertSendable(key, item);
+  else if (v !== null && typeof v === "object") {
+    for (const [k, item] of Object.entries(v)) {
+      assertFieldName(k);
+      assertSendable(key, item);
+    }
+  }
+}
+
+// The written text of a JSON number is sent again as JSON.stringify writes the parsed value: refused unless the
+// two are one number (an integer past 2^53 or a long decimal has already lost digits, 1e999 is Infinity).
+function exactNumber(source: string | undefined, v: number): boolean {
+  if (!Number.isFinite(v)) return false;
+  if (source === undefined) return Number.isSafeInteger(v) || !Number.isInteger(v);
+  if (String(v) === source) return true;
+  return /^-?\d+$/.test(source) && Number.isInteger(v) && BigInt(source) === BigInt(v);
 }
 
 function decodeFormValue(key: string, value: unknown): unknown {
@@ -121,13 +144,19 @@ function decodeFormValue(key: string, value: unknown): unknown {
   const text = value.trimStart();
   if (!text.startsWith("{") && !text.startsWith("[")) return value;
   let parsed: unknown;
+  let inexact = false;
   try {
-    parsed = JSON.parse(value);
+    // The reviver's third argument holds the number's source text (Node 21+).
+    const reviver = (_k: string, v: unknown, context?: { source?: string }): unknown => {
+      if (typeof v === "number" && !exactNumber(context?.source, v)) inexact = true;
+      return v;
+    };
+    parsed = JSON.parse(value, reviver as (this: unknown, k: string, v: unknown) => unknown);
   } catch {
     throw new WriteRefusal(`${key} is not valid JSON`);
   }
-  // A number past 2^53 has already lost digits: re-sent, it would name another object.
-  if (hasUnsafeNumber(parsed)) throw new WriteRefusal(`${key} holds a number too large to send exactly (send ids as strings)`);
+  if (inexact) throw new WriteRefusal(`${key} holds a number that cannot be sent exactly as written (send ids as strings)`);
+  assertSendable(key, parsed);
   return parsed;
 }
 
@@ -136,7 +165,10 @@ export function decodeForm(params: Readonly<Record<string, unknown>>): Record<st
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined || isAccessTokenName(key)) continue;
-    out[key] = decodeFormValue(key, value);
+    assertFieldName(key);
+    const decoded = decodeFormValue(key, value);
+    assertSendable(key, decoded);
+    out[key] = decoded;
   }
   return out;
 }
@@ -336,9 +368,16 @@ export class MetaApiClient {
     path: string,
     body?: Record<string, unknown>,
   ): Promise<T> {
-    const decoded = body === undefined
-      ? {}
-      : Object.fromEntries(Object.entries(body).filter(([key]) => !isAccessTokenName(key)));
+    const decoded = decodedIn(() => {
+      const out = body === undefined
+        ? {}
+        : Object.fromEntries(Object.entries(body).filter(([key]) => !isAccessTokenName(key)));
+      for (const [key, value] of Object.entries(out)) {
+        assertFieldName(key);
+        assertSendable(key, value);
+      }
+      return out;
+    });
     return this.sendWrite<T>("POST", path, decoded, VALIDATE_ONLY, (p) => ({
       url: this.buildUrl(path),
       init: {
@@ -375,6 +414,7 @@ export class MetaApiClient {
     const decoded = decodedIn(() => {
       const out: Record<string, unknown> = {};
       for (const [name, value] of formData.entries()) {
+        assertFieldName(name);
         out[name] = typeof value === "string" ? decodeFormValue(name, value) : MULTIPART_FILE;
       }
       return out;
@@ -429,7 +469,10 @@ export class MetaApiClient {
    * limiter, the write pacer or the circuit breaker, and it is never retried,
    * so it cannot change what a later request does. It reads that state only
    * to abstain: with the circuit open, or while the limiter would wait, it
-   * resolves to undefined without calling Meta. Any failure is undefined too.
+   * resolves to undefined without calling Meta. Any failure to read is
+   * undefined too; a request the client never sends (checkRequestShape: its
+   * callers pass digit and act_ paths with a fields param) throws the
+   * WriteRefusal instead.
    * The caller owns the deadline: aborting `signal` cancels the body as well.
    * The caller also names the token. This method never asks for the current
    * one: where the active token is process-wide it can change between two
@@ -541,7 +584,8 @@ export class MetaApiClient {
     let gate: { requestId: string; label: SentWriteLabel };
     let encoded: Encoded;
     try {
-      if (Object.keys(decoded).some((k) => k.toLowerCase() === "execution_options")) {
+      // Any letter case, and any bracket form (execution_options[0]) Graph would read as the same field.
+      if (Object.keys(decoded).some((k) => /^execution_options($|\[)/i.test(k))) {
         throw new WriteRefusal("execution_options is set by the server for validate_only, never by the caller");
       }
       params = ctx?.validateOnly ? { ...decoded, execution_options: validateOnlyValue } : decoded;
@@ -924,7 +968,14 @@ function scrubbedText(text: string): string {
   } catch {
     token = undefined;
   }
-  return scrubCredentialsDeep(text, token).replace(/\s+/g, " ").trim();
+  let out = scrubCredentialsDeep(text, token);
+  // The proof too, where it stands bare (not as appsecret_proof=…, which the scrub already removes).
+  const secret = process.env.META_APP_SECRET?.trim();
+  if (token && secret) {
+    const proof = createHmac("sha256", secret).update(token.trim()).digest("hex");
+    out = out.split(proof).join("[REDACTED]");
+  }
+  return out.replace(/\s+/g, " ").trim();
 }
 
 function scrubbedMessage(e: unknown): string {
