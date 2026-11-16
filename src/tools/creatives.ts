@@ -772,7 +772,7 @@ export function registerCreativeTools(server: McpServer): void {
       const file = await readUpload(path);
 
       const formData = new FormData();
-      formData.set("filename", new Blob([file.bytes as Uint8Array<ArrayBuffer>]), adImageFileName(name ?? file.name, extname(file.name).toLowerCase()));
+      formData.set("filename", new Blob([file.bytes as Uint8Array<ArrayBuffer>], { type: imageMime(file.name) }), adImageFileName(name ?? file.name, extname(file.name).toLowerCase()));
       if (name) formData.set("name", name);
 
       let result: { images?: Record<string, { hash: string; url: string; name?: string }> };
@@ -1064,6 +1064,12 @@ async function readUpload(relativePath: string): Promise<LocalUpload> {
     throw err;
   }
 }
+
+const IMAGE_MIME: Record<string, string> = {
+  ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif",
+  ".bmp": "image/bmp", ".tiff": "image/tiff", ".tif": "image/tiff", ".webp": "image/webp",
+};
+const imageMime = (fileName: string) => IMAGE_MIME[extname(fileName).toLowerCase()] ?? "application/octet-stream";
 
 const fileLines = (file: LocalUpload) => `SHA-256: ${file.sha256}\nSize: ${file.size} bytes`;
 

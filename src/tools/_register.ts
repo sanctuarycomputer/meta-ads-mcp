@@ -155,6 +155,8 @@ function guardedHandler(name: string, handler: Handler, hadSchema: boolean): Han
   };
 }
 
+const STRICT_INPUT = new Set(["ads_upload_ad_image", "ads_upload_ad_video"]);
+
 /**
  * The only face of the server a tool group sees when toolsets are in force
  * (ticket 252): one method, `registerTool`, which hands a tool to the real
@@ -178,7 +180,9 @@ export function toolFilter(
   ): unknown => {
     if (!admit(name, config.annotations)) return undefined;
     if (config.annotations?.readOnlyHint === true) return register(name, config, handler);
-    const inputSchema = { ...(config.inputSchema ?? {}), validate_only: validateOnlyArg };
+    const shape = { ...(config.inputSchema ?? {}), validate_only: validateOnlyArg };
+    // The SDK strips unknown keys from a plain shape; a tool that must refuse them gets a strict object.
+    const inputSchema = STRICT_INPUT.has(name) ? z.object(shape as z.ZodRawShape).strict() : shape;
     return register(name, { ...config, inputSchema }, guardedHandler(name, handler, config.inputSchema !== undefined));
   };
   return { registerTool: registerTool as unknown as McpServer["registerTool"] };

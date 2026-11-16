@@ -190,11 +190,13 @@ describe("ads_upload_ad_image", () => {
 
   it("a timeout: one request, and the outcome is unknown (the image may exist)", async () => {
     put("a.png", pngBytes());
+    const info = vi.spyOn(logger, "info");
     onWrite = timeout;
     const r = await call("ads_upload_ad_image", { account_id: ACT, path: "a.png" });
     expect(r.isError).toBe(true);
     expect(writes()).toHaveLength(1);
     expect(textOf(r)).toContain("the upload's outcome is unknown: the image may exist; check ads_get_ad_images before uploading again");
+    expect(info).not.toHaveBeenCalledWith(expect.anything(), "Local file uploaded");
   });
 
   it("is not a URL tool: the schema takes path, and no image_url", async () => {
@@ -206,9 +208,28 @@ describe("ads_upload_ad_image", () => {
     } finally {
       await close();
     }
-    const r = await call("ads_upload_ad_image", { account_id: ACT, image_url: "https://cdn.example.test/a.png" });
+    // A valid path with the URL: only the unknown key can decide it.
+    put("a.png", pngBytes());
+    const r = await call("ads_upload_ad_image", { account_id: ACT, path: "a.png", image_url: "https://cdn.example.test/a.png" });
     expect(r.isError).toBe(true);
     expect(calls).toHaveLength(0);
+  });
+
+  it.each([
+    ["a.png", "image/png"],
+    ["a.JPG", "image/jpeg"],
+    ["a.jpeg", "image/jpeg"],
+    ["a.gif", "image/gif"],
+    ["a.bmp", "image/bmp"],
+    ["a.tif", "image/tiff"],
+    ["a.tiff", "image/tiff"],
+    ["a.webp", "image/webp"],
+    ["a.dat", "application/octet-stream"],
+    ["noext", "application/octet-stream"],
+  ])("sends %s with the part type %s", async (file, type) => {
+    put(file, pngBytes());
+    await call("ads_upload_ad_image", { account_id: ACT, path: file });
+    expect((formOf(writes()[0]).get("filename") as File).type).toBe(type);
   });
 });
 
@@ -250,22 +271,26 @@ describe("ads_upload_ad_video", () => {
     ["a transport error", () => Promise.reject(new TypeError("fetch failed"))],
   ])("%s: one request (no resend), and the outcome is unknown", async (_name, fail) => {
     put("clip.mp4", mp4Bytes());
+    const info = vi.spyOn(logger, "info");
     onWrite = fail;
     const r = await call("ads_upload_ad_video", { account_id: ACT, path: "clip.mp4" });
     expect(r.isError).toBe(true);
     expect(writes()).toHaveLength(1);
     expect(textOf(r)).toContain("the upload's outcome is unknown: the video may exist; check ads_get_ad_videos before uploading again");
     expect(textOf(r)).not.toMatch(/write refused/);
+    expect(info).not.toHaveBeenCalledWith(expect.anything(), "Local file uploaded");
   });
 
   it("a Meta 400: Meta's error, not an unknown outcome", async () => {
     put("clip.mp4", mp4Bytes());
+    const info = vi.spyOn(logger, "info");
     onWrite = () => mockFetchResponse({ error: { code: 100, type: "OAuthException", message: "Invalid video file" } }, { status: 400 });
     const r = await call("ads_upload_ad_video", { account_id: ACT, path: "clip.mp4" });
     expect(r.isError).toBe(true);
     expect(textOf(r)).toContain("Invalid video file");
     expect(textOf(r)).not.toContain(MAY_EXIST);
     expect(writes()).toHaveLength(1);
+    expect(info).not.toHaveBeenCalledWith(expect.anything(), "Local file uploaded");
   });
 
   it("the circuit open after the guard's allow: not sent, never \"may exist\"", async () => {
@@ -320,8 +345,9 @@ describe("ads_upload_ad_video", () => {
     } finally {
       await close();
     }
+    put("clip.mp4", mp4Bytes());
     for (const args of [{ file_url: "https://cdn.example.test/v.mp4" }, { source_instagram_media_id: "17900000000000001" }]) {
-      const r = await call("ads_upload_ad_video", { account_id: ACT, ...args });
+      const r = await call("ads_upload_ad_video", { account_id: ACT, path: "clip.mp4", ...args });
       expect(r.isError).toBe(true);
     }
     expect(calls).toHaveLength(0);
