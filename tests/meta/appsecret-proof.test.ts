@@ -101,6 +101,8 @@ describe("every Graph request is signed with appsecret_proof", () => {
     const execute = (client as unknown as { execute: (m: string, u: string, p: string, o?: RequestInit) => Promise<unknown> }).execute.bind(client);
     await execute("GET", "https://graph.facebook.com/v27.0/me", "/me", { headers: { authorization: "Bearer other-token", "X-Extra": "1" } });
     await execute("GET", "https://graph.facebook.com/v27.0/me", "/me", { headers: new Headers({ Authorization: "Bearer other-token", "X-Extra": "1" }) });
+    await execute("GET", "https://graph.facebook.com/v27.0/me", "/me", { headers: [["AUTHORIZATION", "Bearer other-token"], ["X-Extra", "1"]] });
+    expect(calls()).toHaveLength(3);
     for (const [, init] of calls()) {
       const headers = init?.headers as Record<string, string>;
       const auth = Object.entries(headers).filter(([name]) => name.toLowerCase() === "authorization");
