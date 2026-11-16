@@ -363,7 +363,7 @@ jobs:
           # (AUTH_ALLOWED_*) separate their items with spaces instead, checked
           # above: an escaped comma would print a decoded value GitHub cannot mask.
           env_vars: |
-            META_API_VERSION=v26.0
+            META_API_VERSION=v27.0
             LOG_LEVEL=info
             NODE_ENV=production
             NODE_OPTIONS=--max-old-space-size=1536

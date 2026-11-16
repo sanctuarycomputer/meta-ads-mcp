@@ -718,7 +718,7 @@ TOKEN_ENCRYPTION_KEY=$(openssl rand -hex 32)
 SESSION_COOKIE_SECRET=$(openssl rand -base64 32)
 OAUTH_SECRET=$(openssl rand -hex 32)
 FIRESTORE_PROJECT_ID=my-gcp-project   # or use the emulator
-META_API_VERSION=v26.0                # optional; this is the default
+META_API_VERSION=v27.0                # optional; this is the default
 ```
 
 ### Google Cloud Run (reference deploy)

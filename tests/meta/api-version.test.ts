@@ -4,9 +4,11 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
   DEFAULT_META_API_VERSION,
+  assertMetaApiVersion,
   isMetaApiVersionAtLeast,
   resolveMetaApiVersion,
 } from "../../src/meta/api-version.js";
+import { MetaApiClient } from "../../src/meta/client.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -15,19 +17,39 @@ describe("resolveMetaApiVersion", () => {
     vi.unstubAllEnvs();
   });
 
-  it("targets Graph API v26.0 when META_API_VERSION is unset", () => {
+  it("targets Graph API v27.0 when META_API_VERSION is unset", () => {
     vi.stubEnv("META_API_VERSION", undefined);
-    expect(resolveMetaApiVersion()).toBe("v26.0");
+    expect(DEFAULT_META_API_VERSION).toBe("v27.0");
+    expect(resolveMetaApiVersion()).toBe("v27.0");
   });
 
-  it("honours a META_API_VERSION override, ignoring surrounding whitespace", () => {
-    vi.stubEnv("META_API_VERSION", " v25.0 ");
-    expect(resolveMetaApiVersion()).toBe("v25.0");
+  it("accepts v27.0 from META_API_VERSION, ignoring surrounding whitespace", () => {
+    vi.stubEnv("META_API_VERSION", " v27.0 ");
+    expect(resolveMetaApiVersion()).toBe("v27.0");
   });
 
   it("falls back to the default when META_API_VERSION is blank", () => {
     vi.stubEnv("META_API_VERSION", "  ");
-    expect(resolveMetaApiVersion()).toBe("v26.0");
+    expect(resolveMetaApiVersion()).toBe("v27.0");
+  });
+
+  // Graph v27.0 only (design §2; fork review M8): an older version answers
+  // with error #2635, and a newer one is a deliberate bump of the default.
+  const REFUSED = ["v26.0", "v26.9", "v9.0", "v27.1", "v28.0"];
+
+  it.each(REFUSED)("refuses META_API_VERSION=%s, a version other than v27.0", (value) => {
+    vi.stubEnv("META_API_VERSION", value);
+    expect(() => resolveMetaApiVersion()).toThrow(/v27\.0/);
+  });
+
+  it.each(REFUSED)("refuses %s as a client version", (value) => {
+    expect(() => assertMetaApiVersion(value)).toThrow(/v27\.0/);
+    expect(() => new MetaApiClient({ apiVersion: value })).toThrow(/v27\.0/);
+  });
+
+  it("accepts v27.0 as a client version", () => {
+    expect(assertMetaApiVersion("v27.0")).toBe("v27.0");
+    expect(new MetaApiClient({ apiVersion: "v27.0" }).apiVersion).toBe("v27.0");
   });
 
   // The version is interpolated into every request path, including the OAuth
