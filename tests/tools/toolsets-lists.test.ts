@@ -1,21 +1,53 @@
 /**
  * Never lists and read lists (ticket 252, spec check 2).
  *
- * 2.1: the never and kept-out groups, and the tools excluded by name, are
- *      literals here, not read from TOOL_GROUPS, so the table can't vouch for
- *      itself.
+ * 2.1: the never and kept-out groups are literals here, each tied to its
+ *      register function imported straight from its file, and the tools
+ *      excluded by name are a literal; the never tool names come from running
+ *      those imported functions. The table in src/tools/index.ts can't vouch
+ *      for itself.
  * 2.2: every read tool of every allowed group sends only GET, or
- *      POST /act_<n>/insights, shown three ways: a runtime probe of each
- *      handler, a static check of each read block's source, and the read
- *      tools' names pinned. What this doesn't prove: a write behind a module
- *      in another file, reached only by a response shape or argument
- *      combination neither probe builds. On the read server, 253's client
- *      method allowlist (META_ADS_READ_ONLY=1) is the runtime backstop.
+ *      POST /act_<n>/insights, shown three ways:
+ *      - a runtime probe of each handler, with argument sets built from its
+ *        schema and two stub answers;
+ *      - a static check of each read tool's registration block, and of the
+ *        functions in the same file it calls, one level deep;
+ *      - the read tools' names, pinned.
+ *      What this doesn't prove: a write reached only through a function in
+ *      another module (other than the known write helpers), or only by a
+ *      response shape or argument combination the probe doesn't build, or by
+ *      calling the client through a name the static check doesn't know (it
+ *      refuses any alias of metaApiClient in these files). On the read server,
+ *      253's client method allowlist (META_ADS_READ_ONLY=1) is the runtime
+ *      backstop.
  */
 import { readFileSync } from "node:fs";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { z } from "zod";
-import { TOOL_GROUPS, EXCLUDED_TOOLS, resolveToolsets, registerToolsets } from "../../src/tools/index.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { TOOL_GROUPS, EXCLUDED_TOOLS, ToolsetError, resolveToolsets, registerToolsets } from "../../src/tools/index.js";
+import { registerVideoAnalysisTools } from "../../src/tools/video-analysis.js";
+import { registerGeminiKeyTools } from "../../src/tools/gemini-keys.js";
+import { registerAdsLibraryTools } from "../../src/tools/ads-library.js";
+import { registerAdLibrarySearchTools } from "../../src/tools/ad-library-search.js";
+import { registerWhatsAppTools } from "../../src/tools/whatsapp.js";
+import { registerWhatsAppTemplateTools } from "../../src/tools/whatsapp-templates.js";
+import { registerWhatsAppFlowTools } from "../../src/tools/whatsapp-flows.js";
+import { registerWhatsAppConfigTools } from "../../src/tools/whatsapp-config.js";
+import { registerCommentTools } from "../../src/tools/comments.js";
+import { registerLeadTools } from "../../src/tools/leads.js";
+import { registerRuleTools } from "../../src/tools/rules.js";
+import { registerTokenTools } from "../../src/tools/tokens.js";
+import { registerBusinessAccessTools } from "../../src/tools/business-access.js";
+import { registerBillingTools } from "../../src/tools/billing.js";
+import { registerBudgetTools } from "../../src/tools/budget.js";
+import { registerBulkAdTools } from "../../src/tools/bulk-ads.js";
+import { registerAdContentTools } from "../../src/tools/ad-content.js";
+import { registerSocialProofTools } from "../../src/tools/social-proof.js";
+import { registerEntityTools } from "../../src/tools/entities.js";
+import { registerCreativeMediaTools } from "../../src/tools/creative-media.js";
+import { registerAdDossierTools } from "../../src/tools/ad-dossier.js";
+import { registerVideoMediaTools } from "../../src/tools/video-media.js";
 import { createMockMcpServer, setupTestToken, cleanupTestToken } from "../setup.js";
 
 vi.mock("../../src/utils/url-guard.js", async (importOriginal) => {
@@ -30,34 +62,36 @@ vi.mock("../../src/utils/url-guard.js", async (importOriginal) => {
 const SRC = new URL("../../src/", import.meta.url);
 const source = (rel: string) => readFileSync(new URL(rel, SRC), "utf8");
 
-/** design §5.3's never list, as groups: stem -> register function. */
-const NEVER_GROUPS: Record<string, string> = {
-  "video-analysis": "registerVideoAnalysisTools",
-  "gemini-keys": "registerGeminiKeyTools",
-  "ads-library": "registerAdsLibraryTools",
-  "ad-library-search": "registerAdLibrarySearchTools",
-  whatsapp: "registerWhatsAppTools",
-  "whatsapp-templates": "registerWhatsAppTemplateTools",
-  "whatsapp-flows": "registerWhatsAppFlowTools",
-  "whatsapp-config": "registerWhatsAppConfigTools",
-  comments: "registerCommentTools",
-  leads: "registerLeadTools",
-  rules: "registerRuleTools",
-  tokens: "registerTokenTools",
-  "business-access": "registerBusinessAccessTools",
+type Register = (server: McpServer) => void;
+
+/** design §5.3's never list, as groups. */
+const NEVER_GROUPS: Record<string, Register> = {
+  "video-analysis": registerVideoAnalysisTools,
+  "gemini-keys": registerGeminiKeyTools,
+  "ads-library": registerAdsLibraryTools,
+  "ad-library-search": registerAdLibrarySearchTools,
+  whatsapp: registerWhatsAppTools,
+  "whatsapp-templates": registerWhatsAppTemplateTools,
+  "whatsapp-flows": registerWhatsAppFlowTools,
+  "whatsapp-config": registerWhatsAppConfigTools,
+  comments: registerCommentTools,
+  leads: registerLeadTools,
+  rules: registerRuleTools,
+  tokens: registerTokenTools,
+  "business-access": registerBusinessAccessTools,
 };
 
 /** The fork review's keep-outs (scripts-248 §Groups, M10, M11, M17). */
-const KEPT_OUT_GROUPS: Record<string, string> = {
-  billing: "registerBillingTools",
-  budget: "registerBudgetTools",
-  "bulk-ads": "registerBulkAdTools",
-  "ad-content": "registerAdContentTools",
-  "social-proof": "registerSocialProofTools",
-  entities: "registerEntityTools",
-  "creative-media": "registerCreativeMediaTools",
-  "ad-dossier": "registerAdDossierTools",
-  "video-media": "registerVideoMediaTools",
+const KEPT_OUT_GROUPS: Record<string, Register> = {
+  billing: registerBillingTools,
+  budget: registerBudgetTools,
+  "bulk-ads": registerBulkAdTools,
+  "ad-content": registerAdContentTools,
+  "social-proof": registerSocialProofTools,
+  entities: registerEntityTools,
+  "creative-media": registerCreativeMediaTools,
+  "ad-dossier": registerAdDossierTools,
+  "video-media": registerVideoMediaTools,
 };
 
 const ALLOWED_GROUPS = [
@@ -91,31 +125,33 @@ const ALLOWED_READ_TOOLS = [
 /** Read tools that make no Meta call (checked in their source: no metaApiClient request). */
 const NO_META_CALL = ["ads_get_field_context", "ads_get_help_article", "ads_rate_status"];
 
-const allNames = (groups: string) => {
+type Registered = ReturnType<typeof createMockMcpServer>["_registeredTools"][number];
+
+const registeredFor = (names: string): Registered[] => {
   const server = createMockMcpServer();
-  registerToolsets(server as never, resolveToolsets({ META_ADS_TOOLSETS: groups }));
+  registerToolsets(server as never, resolveToolsets({ META_ADS_TOOLSETS: names }));
   return server._registeredTools;
 };
 
-/** Every tool a never or kept-out group's own function registers. */
+/** Every tool a never or kept-out group's own (imported) function registers. */
 function refusedToolNames(): string[] {
   const names: string[] = [];
-  for (const stem of [...Object.keys(NEVER_GROUPS), ...Object.keys(KEPT_OUT_GROUPS)]) {
+  for (const register of [...Object.values(NEVER_GROUPS), ...Object.values(KEPT_OUT_GROUPS)]) {
     const server = createMockMcpServer();
-    TOOL_GROUPS[stem].register(server as never);
+    register(server as never);
     names.push(...server._registeredTools.map((t) => t.name));
   }
   return names;
 }
 
 describe("never and kept-out lists (check 2.1)", () => {
-  it("each never and kept-out literal matches the table's function and status", () => {
+  it("each never and kept-out literal is the table's function, with its status", () => {
     for (const [stem, fn] of Object.entries(NEVER_GROUPS)) {
-      expect(TOOL_GROUPS[stem]?.register.name, stem).toBe(fn);
+      expect(TOOL_GROUPS[stem]?.register, stem).toBe(fn);
       expect(TOOL_GROUPS[stem].status, stem).toBe("never");
     }
     for (const [stem, fn] of Object.entries(KEPT_OUT_GROUPS)) {
-      expect(TOOL_GROUPS[stem]?.register.name, stem).toBe(fn);
+      expect(TOOL_GROUPS[stem]?.register, stem).toBe(fn);
       expect(TOOL_GROUPS[stem].status, stem).toBe("kept-out");
     }
     for (const stem of ALLOWED_GROUPS) expect(TOOL_GROUPS[stem]?.status, stem).toBe("allowed");
@@ -153,11 +189,14 @@ describe("never and kept-out lists (check 2.1)", () => {
     const names = new Set<string>();
     for (const stem of ALLOWED_GROUPS) {
       for (const name of [stem, `${stem}:write`]) {
+        let tools: Registered[] = [];
         try {
-          for (const t of allNames(name)) names.add(t.name);
-        } catch {
-          // a name that registers nothing is refused; nothing to collect
+          tools = registeredFor(name);
+        } catch (error) {
+          // Only "registers nothing" is an expected refusal of an allowed group's name.
+          if (!(error instanceof ToolsetError) || error.problems.some((p) => p.reason !== "registers nothing")) throw error;
         }
+        for (const t of tools) names.add(t.name);
       }
     }
     const refused = [...refusedToolNames(), ...EXCLUDED_BY_NAME];
@@ -172,12 +211,12 @@ describe("never and kept-out lists (check 2.1)", () => {
 
 // ─── 2.2: read tools send only GET or POST /act_<n>/insights ───────────────
 
-function allowedReadTools() {
-  const tools: Array<ReturnType<typeof createMockMcpServer>["_registeredTools"][number] & { group: string }> = [];
+function allowedReadTools(): Array<Registered & { group: string }> {
+  const tools: Array<Registered & { group: string }> = [];
   for (const stem of ALLOWED_GROUPS) {
     // A stem missing from the table is reported by the key-equality test, not by a crash here.
     if (!Object.hasOwn(TOOL_GROUPS, stem)) continue;
-    for (const t of allNames(stem)) tools.push({ ...t, group: stem });
+    for (const t of registeredFor(stem)) tools.push({ ...t, group: stem });
   }
   return tools;
 }
@@ -188,96 +227,142 @@ describe("read tools are pinned (check 2.2, names)", () => {
   });
 });
 
-/** Argument values built from a zod 4 schema. */
+// Argument values built from a zod 4 schema. Ids are fresh on every call, so
+// no per-id cache or throttle in the fork (account currency, report polling)
+// carries state from one call to the next.
 type Def = { type: string; [k: string]: unknown };
 const defOf = (s: z.ZodType): Def => (s as unknown as { _zod: { def: Def } })._zod.def;
+const WRAPPERS = ["optional", "default", "nullable", "prefault", "readonly", "catch", "nonoptional"];
 
 function sample(key: string): string {
-  if (/account/.test(key)) return "act_1234567890";
+  if (/account/.test(key)) return "act_100000000";
   if (/since|until|date|time_start|time_stop/.test(key)) return "2026-01-01";
   if (/url|link/.test(key)) return "https://example.com/a.png";
-  return "1234567890";
+  return "100000000";
 }
 
-function build(s: z.ZodType, key: string, all: boolean): unknown {
+/** mode "required" leaves out optional and defaulted fields (so the schema's defaults apply); "all" fills every field. */
+function build(s: z.ZodType, key: string, mode: "required" | "all"): unknown {
   const d = defOf(s);
   switch (d.type) {
-    case "optional":
-      return all ? build(d.innerType as z.ZodType, key, all) : undefined;
-    case "default": case "nullable": case "prefault": case "readonly": case "catch": case "nonoptional":
-      return build(d.innerType as z.ZodType, key, all);
-    case "pipe": return build(d.in as z.ZodType, key, all);
-    case "lazy": return build((d.getter as () => z.ZodType)(), key, all);
+    case "optional": case "default": case "prefault":
+      return mode === "all" ? build(d.innerType as z.ZodType, key, mode) : undefined;
+    case "nullable": case "readonly": case "catch": case "nonoptional":
+      return build(d.innerType as z.ZodType, key, mode);
+    case "pipe": return build(d.in as z.ZodType, key, mode);
+    case "lazy": return build((d.getter as () => z.ZodType)(), key, mode);
     case "string": return sample(key);
     case "number": case "int": case "bigint": return 1;
     case "boolean": return false;
     case "enum": return Object.values(d.entries as Record<string, unknown>)[0];
     case "literal": return (d.values as unknown[])[0];
-    case "array": return [build(d.element as z.ZodType, key, all)];
+    case "array": return [build(d.element as z.ZodType, key, mode === "required" ? "all" : mode)];
     case "object": {
       const out: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(d.shape as Record<string, z.ZodType>)) {
-        const x = build(v, k, all);
+        const x = build(v, k, mode);
         if (x !== undefined) out[k] = x;
       }
       return out;
     }
-    case "union": return build((d.options as z.ZodType[])[0], key, all);
+    case "union": return build((d.options as z.ZodType[])[0], key, mode);
     case "record": return {};
     case "any": case "unknown": return "1";
     default: return undefined;
   }
 }
 
-/** Unwraps to the field's inner type, for variants. */
 function inner(s: z.ZodType): z.ZodType {
   let cur = s;
   for (;;) {
     const d = defOf(cur);
-    if (["optional", "default", "nullable", "prefault", "readonly", "catch", "nonoptional"].includes(d.type)) cur = d.innerType as z.ZodType;
+    if (WRAPPERS.includes(d.type)) cur = d.innerType as z.ZodType;
     else if (d.type === "pipe") cur = d.in as z.ZodType;
     else return cur;
   }
 }
 
-/** Argument sets: required only, every field, required plus each optional field alone, then one variant per enum value and per boolean, per field. */
-function argumentSets(shape: Record<string, z.ZodType>): Array<{ label: string; args: Record<string, unknown> }> {
+let seq = 0;
+/** A copy of args with every sample id replaced by a fresh one. */
+function freshen(value: unknown): unknown {
+  if (typeof value === "string") {
+    if (value === "100000000") return String(100000000 + ++seq);
+    if (value === "act_100000000") return `act_${100000000 + ++seq}`;
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(freshen);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, freshen(v)]));
+  return value;
+}
+
+type ArgSet = { label: string; args: Record<string, unknown> };
+
+/** Starting sets: required only (defaults applied), every field, and required plus each other field alone. */
+function starterSets(shape: Record<string, z.ZodType>): ArgSet[] {
   const obj = z.object(shape);
-  const base = build(obj, "", false) as Record<string, unknown>;
-  const full = build(obj, "", true) as Record<string, unknown>;
-  const sets = [{ label: "required", args: base }, { label: "all", args: full }];
-  // required fields plus one optional field at a time, for tools whose optional fields exclude each other
+  const base = build(obj, "", "required") as Record<string, unknown>;
+  const full = build(obj, "", "all") as Record<string, unknown>;
+  const sets: ArgSet[] = [{ label: "required", args: base }, { label: "all", args: full }];
   for (const k of Object.keys(shape)) {
     if (!(k in base) && k in full) sets.push({ label: `+${k}`, args: { ...base, [k]: full[k] } });
-  }
-  for (const [k, v] of Object.entries(shape)) {
-    const d = defOf(inner(v));
-    if (d.type === "enum") {
-      for (const value of Object.values(d.entries as Record<string, unknown>)) sets.push({ label: `${k}=${String(value)}`, args: { ...full, [k]: value } });
-    } else if (d.type === "boolean") {
-      sets.push({ label: `${k}=true`, args: { ...full, [k]: true } }, { label: `${k}=false`, args: { ...full, [k]: false } });
-    }
   }
   return sets;
 }
 
-const ALLOWED_REQUEST = /^(GET \/.*|POST \/act_\d+\/insights)$/;
+/** On top of a starting set: each enum value and each boolean, one field at a time. */
+function variantsOf(shape: Record<string, z.ZodType>, start: ArgSet): ArgSet[] {
+  const out: ArgSet[] = [];
+  for (const [k, v] of Object.entries(shape)) {
+    const d = defOf(inner(v));
+    if (d.type === "enum") {
+      for (const value of Object.values(d.entries as Record<string, unknown>)) out.push({ label: `${start.label} ${k}=${String(value)}`, args: { ...start.args, [k]: value } });
+    } else if (d.type === "boolean") {
+      for (const value of [true, false]) out.push({ label: `${start.label} ${k}=${value}`, args: { ...start.args, [k]: value } });
+    }
+  }
+  return out;
+}
+
+const ALLOWED_REQUEST = /^(GET \/\S*|POST \/act_\d+\/insights)$/;
+
+/** Any key named method or _method, any case, in a query string or a body. */
+function overrideKey(params: Iterable<string>): boolean {
+  for (const k of params) if (/^_?method$/i.test(k)) return true;
+  return false;
+}
+
+function bodyKeys(body: unknown): string[] {
+  if (body === undefined || body === null) return [];
+  if (typeof body === "string") {
+    try {
+      return Object.keys(JSON.parse(body) as object);
+    } catch {
+      return [...new URLSearchParams(body).keys()];
+    }
+  }
+  if (body instanceof URLSearchParams || body instanceof FormData) return [...body.keys()];
+  return ["<opaque body>"];
+}
 
 describe("read tools send only GET or POST /act_<n>/insights (check 2.2, runtime probe)", () => {
   let requests: string[] = [];
   let populated = false;
   let served = 0;
+  const pagedTools = new Set<string>();
 
   beforeEach(() => {
     setupTestToken();
-    requests = [];
-    vi.stubGlobal("fetch", vi.fn(async (url: string | URL, init?: RequestInit) => {
-      const u = new URL(String(url));
-      requests.push(`${init?.method ?? "GET"} ${u.pathname.replace(/^\/v[\d.]+/, "")}`);
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const req = input instanceof Request ? input : undefined;
+      const u = new URL(req ? req.url : String(input));
+      const method = (init?.method ?? req?.method ?? "GET").toUpperCase();
+      const path = u.pathname.replace(/^\/v[\d.]+/, "");
+      const override = overrideKey(u.searchParams.keys()) || overrideKey(bodyKeys(init?.body));
+      requests.push(override ? `OVERRIDE ${method} ${path}` : `${method} ${path}`);
       served++;
       const body = populated
-        ? { id: "1234567890", success: true, data: [{ id: "1234567890", name: "n" }],
-            paging: served === 1 ? { next: `${u.origin}${u.pathname}?after=x` } : {} }
+        ? { id: "100000000", success: true, data: [{ id: "100000000", name: "n" }],
+            paging: served === 1 ? { cursors: { after: "c1" }, next: `${u.origin}${u.pathname}?after=c1` } : {} }
         : { data: [] };
       return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
     }));
@@ -290,78 +375,119 @@ describe("read tools send only GET or POST /act_<n>/insights (check 2.2, runtime
 
   it.each(allowedReadTools().map((t) => [t.name, t] as const))("%s", async (_name, tool) => {
     const shape = (tool.schema ?? {}) as Record<string, z.ZodType>;
-    const sets = argumentSets(shape);
-    expect(z.object(shape).safeParse(sets[0].args).success, "required arguments must pass the schema").toBe(true);
-    expect(z.object(shape).safeParse(sets[1].args).success, "all-field arguments must pass the schema").toBe(true);
-    const silent: string[] = [];
-    let anyRequest = false;
-    for (const stub of [false, true]) {
-      for (const { label, args } of sets) {
-        populated = stub;
-        served = 0;
-        requests = [];
-        const parsed = z.object(shape).safeParse(args);
-        if (!parsed.success) continue; // only the base set is required to build; variants that don't parse are skipped
-        let result: unknown;
-        let thrown: unknown;
-        try {
-          result = await tool.handler(parsed.data, {});
-        } catch (error) {
-          thrown = error;
-        }
-        for (const r of requests) expect(r, `${tool.name} [${label}, ${stub ? "populated" : "empty"}]`).toMatch(ALLOWED_REQUEST);
-        if (requests.length > 0) anyRequest = true;
-        else silent.push(`[${label}] ${String(thrown ?? JSON.stringify(result)).slice(0, 160)}`);
+    const obj = z.object(shape);
+    const starters = starterSets(shape);
+    expect(obj.safeParse(starters[0].args).success, "required arguments must pass the schema").toBe(true);
+    expect(obj.safeParse(starters[1].args).success, "all-field arguments must pass the schema").toBe(true);
+
+    let pagesFollowed = false;
+    const run = async (set: ArgSet, stub: boolean): Promise<string[]> => {
+      const parsed = obj.safeParse(freshen(set.args));
+      expect(parsed.success, `${tool.name} [${set.label}] arguments must pass the schema`).toBe(true);
+      if (!parsed.success) return [];
+      populated = stub;
+      served = 0;
+      requests = [];
+      try {
+        await tool.handler(parsed.data, {});
+      } catch {
+        // A refusal is fine; what was sent before it is checked below.
+      }
+      for (const r of requests) expect(r, `${tool.name} [${set.label}, ${stub ? "populated" : "empty"}]`).toMatch(ALLOWED_REQUEST);
+      if (stub && served > 1) pagesFollowed = true;
+      return requests;
+    };
+
+    // Starting sets under both answers; the ones that reach Meta are "live".
+    const live: ArgSet[] = [];
+    for (const set of starters) {
+      const sent = await run(set, false);
+      await run(set, true);
+      if (sent.length > 0) live.push(set);
+    }
+    // Enum and boolean variants on every live starting set (or on all of them, if none is live).
+    for (const start of live.length > 0 ? live : starters) {
+      for (const set of variantsOf(shape, start)) {
+        await run(set, false);
+        await run(set, true);
       }
     }
-    // Some tools need one of several optional fields, so the required-only set
-    // may stop before calling Meta; the all-field set and the variants reach it.
-    // Every tool that calls Meta at all must be seen calling it here.
-    if (!NO_META_CALL.includes(tool.name)) {
-      expect(anyRequest, `${tool.name} made no request under any argument set: ${silent.slice(0, 3).join(" | ")}`).toBe(true);
+
+    if (NO_META_CALL.includes(tool.name)) {
+      expect(live, `${tool.name} is listed as making no Meta call`).toEqual([]);
     } else {
-      expect(anyRequest, `${tool.name} is listed as making no Meta call`).toBe(false);
+      // Some tools need one of several optional fields, so the required-only set
+      // may stop before calling Meta; then another starting set must reach it.
+      expect(live.length, `${tool.name} made no request under any starting set`).toBeGreaterThan(0);
     }
-  }, 20_000);
+    if (pagesFollowed) pagedTools.add(tool.name);
+  }, 60_000);
+
+  it("the populated answer's next page is followed by the list tools", () => {
+    // Runs after the probes above (tests in a file run in order): the paging stub is exercised.
+    expect(pagedTools.size).toBeGreaterThan(5);
+  });
 });
 
-// ─── 2.2, static: read blocks call no client write method or write helper ───
+// ─── 2.2, static: read tools' blocks call no client write method or write helper ───
 
 const WRITE_CALL = /metaApiClient\s*\.\s*(post|postForm|postMultipart|delete|execute)\b/;
+const ALIAS = /(?:[=(,:]\s*metaApiClient\s*[;),\]}]|metaApiClient\s*\[|\}\s*=\s*metaApiClient\b(?!\s*\.)|=\s*metaApiClient\s*$)/m;
 
-function helperExports(rel: string): string[] {
+function exportedFunctions(rel: string): string[] {
   return [...source(rel).matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1]);
 }
-const WRITE_HELPERS = [...helperExports("meta/post-edit.ts"), ...helperExports("meta/creative-rebuild.ts")];
+const WRITE_HELPERS = [...exportedFunctions("meta/post-edit.ts"), ...exportedFunctions("meta/creative-rebuild.ts")];
 
-/** Module-level functions in a file (outside any block), name -> body text. */
-function moduleFunctions(text: string): Map<string, string> {
+/** A line that starts a top-level declaration; a registration block ends at the next one. */
+const TOP_LEVEL = /^(?:export\s|async\s|function\s|const\s|let\s|var\s|class\s|interface\s|type\s|enum\s)/m;
+
+/** Functions defined anywhere in a file (declarations, arrow or function expressions), name -> text up to the next definition or registration. */
+function fileFunctions(text: string): Map<string, string> {
   const out = new Map<string, string>();
-  const starts = [...text.matchAll(/^(?:export )?(?:async )?function (\w+)|^(?:export )?const (\w+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*(?::[^=]+)?=>/gm)];
-  for (let i = 0; i < starts.length; i++) {
-    const name = starts[i][1] ?? starts[i][2];
+  const defs = [...text.matchAll(/\bfunction\s+(\w+)\s*[<(]|\b(?:const|let|var)\s+(\w+)\s*(?::[^=]+)?=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*(?::[^=]+)?=>|\w+\s*=>)/g)];
+  for (let i = 0; i < defs.length; i++) {
+    const name = defs[i][1] ?? defs[i][2];
     if (/^register\w*Tools$/.test(name)) continue;
-    const end = i + 1 < starts.length ? starts[i + 1].index : text.length;
-    out.set(name, text.slice(starts[i].index, end));
+    const nextDef = i + 1 < defs.length ? defs[i + 1].index : text.length;
+    const nextBlock = text.indexOf("registerTool(", defs[i].index);
+    const end = nextBlock === -1 ? nextDef : Math.min(nextDef, nextBlock);
+    out.set(name, text.slice(defs[i].index, end));
   }
   return out;
 }
 
-describe("read blocks call no client write method or write helper (check 2.2, static)", () => {
+/** Each tool's registration block in a file, by tool name. */
+function blocks(text: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const part of text.split(/\bregisterTool\(/).slice(1)) {
+    const name = /^\s*["'`](\w+)["'`]/.exec(part)?.[1];
+    if (!name) continue;
+    const m = TOP_LEVEL.exec(part);
+    out.set(name, m ? part.slice(0, m.index) : part);
+  }
+  return out;
+}
+
+describe("read tools' blocks call no client write method or write helper (check 2.2, static)", () => {
+  const readByGroup = new Map<string, string[]>();
+  for (const t of allowedReadTools()) readByGroup.set(t.group, [...(readByGroup.get(t.group) ?? []), t.name]);
+
   it.each(ALLOWED_GROUPS)("%s", (stem) => {
     const text = source(`tools/${stem}.ts`);
-    const helpers = moduleFunctions(text);
-    // each block ends where the register function does (a "}" at column 0)
-    const parts = text.split(/server\.registerTool\(/).slice(1).map((b) => b.split(/\n\}/)[0]);
-    expect(parts.length).toBeGreaterThan(0);
-    for (const block of parts) {
-      const name = /^\s*["'`](\w+)["'`]/.exec(block)?.[1] ?? "?";
-      if (!/annotations:\s*\{\s*\.\.\.READ\b/.test(block)) continue;
+    expect(text, `${stem}: metaApiClient is aliased, so the static check can't follow it`).not.toMatch(ALIAS);
+    const byName = blocks(text);
+    const functions = fileFunctions(text);
+    for (const name of readByGroup.get(stem) ?? []) {
+      const block = byName.get(name);
+      expect(block, `${name}: no registration block found in tools/${stem}.ts`).toBeDefined();
+      if (!block) continue;
       expect(block, `${name}: client write call in a read block`).not.toMatch(WRITE_CALL);
       for (const h of WRITE_HELPERS) expect(new RegExp(`\\b${h}\\s*\\(`).test(block), `${name} calls write helper ${h}`).toBe(false);
-      for (const [h, body] of helpers) {
-        if (!new RegExp(`\\b${h}\\s*\\(`).test(block)) continue;
-        expect(body, `${name} calls ${h}, which makes a client write call`).not.toMatch(WRITE_CALL);
+      for (const [f, body] of functions) {
+        if (!new RegExp(`\\b${f}\\s*\\(`).test(block)) continue;
+        expect(body, `${name} calls ${f}, which makes a client write call`).not.toMatch(WRITE_CALL);
+        for (const h of WRITE_HELPERS) expect(new RegExp(`\\b${h}\\s*\\(`).test(body), `${name} calls ${f}, which calls write helper ${h}`).toBe(false);
       }
     }
   });
