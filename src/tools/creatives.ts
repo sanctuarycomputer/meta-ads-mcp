@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { metaApiClient } from "../meta/client.js";
+import { extname, isAbsolute } from "node:path";
+import { lastWriteFate, metaApiClient } from "../meta/client.js";
 import { normalizeAccountId, validateMetaId, validateNumericId } from "../utils/format.js";
 import { readList } from "../meta/read-list.js";
 import { ADVERTISER_CONTENT_CLOSE, ADVERTISER_CONTENT_OPEN, singleLine } from "../utils/single-line.js";
@@ -15,7 +16,8 @@ import { VIDEO_DEFAULT_FIELDS, VIDEO_DETAIL_FIELDS } from "../meta/types/video.j
 import type { AdCreative, AdImage, AdVideo, MetaApiResponse } from "../meta/types/index.js";
 import { logger } from "../utils/logger.js";
 import { assertSafePublicUrl, UnsafeUrlError } from "../utils/url-guard.js";
-import { downloadSafePublicImage } from "../utils/safe-download.js";
+import { LocalUploadError, readLocalUpload, type LocalUpload } from "../utils/local-upload.js";
+import { callContext } from "../meta/write-guard.js";
 import { READ, CREATE, UPDATE, UPLOAD, WRITE_WARNING } from "./_register.js";
 import {
   ADVANTAGE_CREATIVE_FEATURES,
@@ -757,60 +759,43 @@ export function registerCreativeTools(server: McpServer): void {
   server.registerTool(
     "ads_upload_ad_image",
     {
-      description: `${WRITE_WARNING}Upload an image to Meta for use in ad creatives. Provide an image URL — the server will download and upload it to Meta. Returns an image hash for use in ads_create_ad_creative.`,
+      description: `${WRITE_WARNING}Upload a local image file to Meta for ad creatives. Returns the image hash for ads_create_ad_creative.`,
       inputSchema: {
         account_id: z.string().describe("Ad account ID"),
-        image_url: z.string().describe("URL of the image to upload"),
+        path: z.string().describe(UPLOAD_PATH),
         name: z.string().optional().describe("Optional name for the image"),
       },
       annotations: { ...UPLOAD },
     },
-    async ({ account_id, image_url, name }) => {
+    async ({ account_id, path, name }) => {
       const id = normalizeAccountId(account_id);
+      const file = await readUpload(path);
 
+      const formData = new FormData();
+      formData.set("filename", new Blob([file.bytes as Uint8Array<ArrayBuffer>]), adImageFileName(name ?? file.name, extname(file.name).toLowerCase()));
+      if (name) formData.set("name", name);
+
+      let result: { images?: Record<string, { hash: string; url: string; name?: string }> };
       try {
-        const downloaded = await downloadSafePublicImage(image_url);
-        logger.info(
-          { imageHost: downloaded.finalUrl.hostname, bytes: downloaded.buffer.length },
-          "Downloaded image for upload",
-        );
-
-        const formData = new FormData();
-        const imageBytes = new Uint8Array(downloaded.buffer.length);
-        imageBytes.set(downloaded.buffer);
-        formData.set(
-          "filename",
-          new Blob([imageBytes], { type: downloaded.contentType }),
-          adImageFileName(name, downloaded.extension),
-        );
-        if (name) formData.set("name", name);
-
-        const result = await metaApiClient.postMultipart<{ images: Record<string, { hash: string; url: string; name?: string }> }>(
-          `/${id}/adimages`,
-          formData,
-        );
-
-        const imageEntries = Object.values(result.images ?? {});
-        const uploaded = imageEntries[0];
-
-        if (!uploaded) {
-          throw new Error("Image upload failed — no image hash returned.");
-        }
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Image uploaded successfully!\nHash: ${uploaded.hash}\nURL: ${uploaded.url}\nName: ${uploaded.name ?? name ?? "N/A"}\n\nUse the hash "${uploaded.hash}" when creating a creative with ads_create_ad_creative.`,
-            },
-          ],
-        };
+        result = await metaApiClient.postMultipart(`/${id}/adimages`, formData);
       } catch (err) {
-        if (err instanceof UnsafeUrlError) {
-          throw new Error(`Refusing to download image_url: ${err.message}`);
-        }
-        throw err;
+        throw uploadError(err, "image");
       }
+      logUploaded(path, file);
+
+      const uploaded = Object.values(result.images ?? {})[0];
+      if (!uploaded) {
+        throw new Error("Image upload failed — no image hash returned.");
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Image uploaded successfully!\nHash: ${uploaded.hash}\nURL: ${uploaded.url}\nName: ${uploaded.name ?? name ?? "N/A"}\n${fileLines(file)}\n\nUse the hash "${uploaded.hash}" when creating a creative with ads_create_ad_creative.`,
+          },
+        ],
+      };
     },
   );
 
@@ -957,52 +942,40 @@ export function registerCreativeTools(server: McpServer): void {
   server.registerTool(
     "ads_upload_ad_video",
     {
-      description: `${WRITE_WARNING}Upload a video to Meta for use in ad creatives. Provide either a public video URL (file_url) or an Instagram media ID (source_instagram_media_id) to upload directly from IG. Returns a video_id for use in ads_create_ad_creative. Useful for promoting Instagram Reels.`,
+      description: `${WRITE_WARNING}Upload a local video file (up to 100 MB) to Meta for ad creatives. Returns a video_id for ads_create_ad_creative; Meta keeps processing it.`,
       inputSchema: {
         account_id: z.string().describe("Ad account ID"),
-        file_url: z.string().optional().describe("Public URL of the video file (MP4). Required unless source_instagram_media_id is provided. Can be an Instagram Reel media_url."),
-        source_instagram_media_id: z.string().optional().describe("Instagram media ID (V2) to upload an IG video directly to the ad library. Alternative to file_url — simplifies the Reel promotion flow."),
-        name: z.string().optional().describe("Name of the video in the ad library (for organization). Different from title."),
+        path: z.string().describe(UPLOAD_PATH),
+        name: z.string().optional().describe("Name in the ad library (not the title)"),
         title: z.string().optional().describe("Title for the video"),
         description: z.string().optional().describe("Description for the video"),
       },
       annotations: { ...UPLOAD },
     },
-    async ({ account_id, file_url, source_instagram_media_id, name, title, description }) => {
+    async ({ account_id, path, name, title, description }) => {
       const id = normalizeAccountId(account_id);
+      const file = await readUpload(path);
 
-      const body: Record<string, string | number | boolean> = {};
+      const formData = new FormData();
+      formData.set("source", new Blob([file.bytes as Uint8Array<ArrayBuffer>]), file.name);
+      if (name) formData.set("name", name);
+      if (title) formData.set("title", title);
+      if (description) formData.set("description", description);
 
-      if (source_instagram_media_id) {
-        body.source_instagram_media_id = source_instagram_media_id;
-      } else if (file_url) {
-        try {
-          await assertSafePublicUrl(file_url);
-        } catch (err) {
-          if (err instanceof UnsafeUrlError) {
-            throw new Error(`Refusing to forward file_url to Meta: ${err.message}`);
-          }
-          throw err;
-        }
-        body.file_url = file_url;
-      } else {
-        throw new Error("Either file_url or source_instagram_media_id is required.");
+      // One request: an act_ POST is creating, and a bounded call is never resent.
+      let result: { id: string };
+      try {
+        result = await metaApiClient.postMultipart<{ id: string }>(`/${id}/advideos`, formData, { timeoutMs: VIDEO_UPLOAD_MS });
+      } catch (err) {
+        throw uploadError(err, "video");
       }
-
-      if (name) body.name = name;
-      if (title) body.title = title;
-      if (description) body.description = description;
-
-      const result = await metaApiClient.postForm<{ id: string }>(
-        `/${id}/advideos`,
-        body,
-      );
+      logUploaded(path, file);
 
       return {
         content: [
           {
             type: "text",
-            text: `Video uploaded successfully!\nID: ${result.id}\nName: ${name ?? "N/A"}\nTitle: ${title ?? "N/A"}\n\nUse this video_id "${result.id}" when creating a creative with ads_create_ad_creative (video_id parameter).`,
+            text: `Video uploaded successfully!\nID: ${result.id}\nName: ${name ?? "N/A"}\nTitle: ${title ?? "N/A"}\n${fileLines(file)}\n\nUse this video_id "${result.id}" when creating a creative with ads_create_ad_creative (video_id parameter).`,
           },
         ],
       };
@@ -1068,3 +1041,47 @@ export function registerCreativeTools(server: McpServer): void {
 const CREATIVE_ADS_MAX_LIMIT = 100;
 const CREATIVE_ADS_PAGES = 10;
 const CREATIVE_ADS_SCAN = 5000;
+
+// ─── Local uploads (spec check 2, M9) ─────────────────────────
+
+const UPLOAD_PATH = "Path of the file, relative to the upload directory";
+const VIDEO_UPLOAD_MS = 300_000;
+
+/** The upload directory, `META_ADS_UPLOAD_DIR`, read per call; uploads are off unless it is an absolute path. */
+export function uploadDir(): string {
+  const dir = process.env.META_ADS_UPLOAD_DIR;
+  if (!dir || !isAbsolute(dir)) throw new Error("uploads are off: META_ADS_UPLOAD_DIR is not set to an absolute path");
+  return dir;
+}
+
+/** The named file under the upload directory, through the local-upload reader; its refusal names the reason. */
+async function readUpload(relativePath: string): Promise<LocalUpload> {
+  const root = uploadDir();
+  try {
+    return await readLocalUpload(root, relativePath);
+  } catch (err) {
+    if (err instanceof LocalUploadError) throw new Error(`upload refused (${err.code}): ${err.message}`);
+    throw err;
+  }
+}
+
+const fileLines = (file: LocalUpload) => `SHA-256: ${file.sha256}\nSize: ${file.size} bytes`;
+
+function logUploaded(relativePath: string, file: LocalUpload): void {
+  logger.info({ file: relativePath, size: file.size, sha256: file.sha256 }, "Local file uploaded");
+}
+
+/**
+ * A thrown upload error, by what became of the upload (`lastWriteFate`): sent with no usable answer is an unknown
+ * outcome, never a refusal; never sent says so; a Meta error or a refusal stays as it is (the wrapper shows a refusal).
+ */
+function uploadError(err: unknown, kind: "image" | "video"): unknown {
+  const ctx = callContext.getStore();
+  const fate = ctx ? lastWriteFate(ctx) : null;
+  const message = err instanceof Error ? err.message : String(err);
+  if (fate === "unknown") {
+    return new Error(`the upload's outcome is unknown: the ${kind} may exist; check ads_get_ad_${kind}s before uploading again (${message})`);
+  }
+  if (fate === "not-sent") return new Error(`not sent: ${message}`);
+  return err;
+}

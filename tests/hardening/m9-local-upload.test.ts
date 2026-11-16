@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { promises as fsp } from "node:fs";
-import { appendFileSync, chmodSync, mkdtempSync, mkdirSync, readdirSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, linkSync, mkdtempSync, mkdirSync, readdirSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -80,6 +80,45 @@ describe.skipIf(process.platform !== "linux")("M9: readLocalUpload", () => {
   it("refuses a directory", async () => {
     mkdirSync(path.join(root, "sub"));
     expect(await codeOf(() => readLocalUpload(root, "sub"))).toBe("not-regular");
+  });
+
+  it("refuses a hard link inside the root to a file outside it (253: nlink is not 1)", async () => {
+    writeFileSync(path.join(outside, "secret.png"), "x");
+    linkSync(path.join(outside, "secret.png"), path.join(root, "a.png"));
+    expect(await codeOf(() => readLocalUpload(root, "a.png"))).toBe("hard-link");
+  });
+
+  it("refuses a file with a second link inside the root too", async () => {
+    writeFileSync(path.join(root, "a.png"), "x");
+    linkSync(path.join(root, "a.png"), path.join(root, "b.png"));
+    expect(await codeOf(() => readLocalUpload(root, "b.png"))).toBe("hard-link");
+  });
+
+  it("reads a file whose other link was removed (nlink back to 1)", async () => {
+    writeFileSync(path.join(outside, "a.png"), "x");
+    linkSync(path.join(outside, "a.png"), path.join(root, "a.png"));
+    rmSync(path.join(outside, "a.png"));
+    expect((await readLocalUpload(root, "a.png")).size).toBe(1);
+  });
+
+  it("refuses a 0-byte file as empty", async () => {
+    writeFileSync(path.join(root, "zero.png"), "");
+    expect(await codeOf(() => readLocalUpload(root, "zero.png"))).toBe("empty");
+  });
+
+  it("refuses a file that shrank to 0 bytes after opening as empty", async () => {
+    const file = path.join(root, "shrink.png");
+    writeFileSync(file, Buffer.alloc(10, 1));
+    seams.readFdPath = async (fd) => {
+      truncateSync(file, 0);
+      return original.readFdPath(fd);
+    };
+    expect(await codeOf(() => readLocalUpload(root, "shrink.png"))).toBe("empty");
+  });
+
+  it("reads a 1-byte file", async () => {
+    writeFileSync(path.join(root, "one.png"), "x");
+    expect((await readLocalUpload(root, "one.png")).size).toBe(1);
   });
 
   it("refuses over maxBytes", async () => {

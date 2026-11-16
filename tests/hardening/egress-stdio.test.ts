@@ -85,7 +85,8 @@ const OVERRIDES: Record<string, Override> = {
 
 /** §5.3-group tools that make no Meta request, each with its reason. */
 const NO_REQUEST: Record<string, string> = {
-  ads_upload_ad_image: "M9: the server fetches no image URL; refused before any request (253 wires local files)",
+  ads_upload_ad_image: "M9: reads a local file under META_ADS_UPLOAD_DIR (none here); refused before any request",
+  ads_upload_ad_video: "M9: reads a local file under META_ADS_UPLOAD_DIR (none here); refused before any request",
 };
 
 const ENV: Record<string, string> = {

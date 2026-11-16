@@ -1,17 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-
-vi.mock("../../src/utils/safe-download.js", () => ({
-  downloadSafePublicImage: vi.fn(),
-}));
+import { describe, it, expect } from "vitest";
 
 import { adImageFileName, registerCreativeTools } from "../../src/tools/creatives.js";
-import { downloadSafePublicImage } from "../../src/utils/safe-download.js";
-import {
-  createMockMcpServer,
-  setupTestToken,
-  cleanupTestToken,
-  mockFetchResponse,
-} from "../setup.js";
+import { createMockMcpServer } from "../setup.js";
 
 describe("adImageFileName", () => {
   it("falls back to image<ext> when there is no name", () => {
@@ -93,47 +83,13 @@ describe("adImageFileName", () => {
   });
 });
 
-describe("ads_upload_ad_image handler", () => {
-  beforeEach(() => {
-    setupTestToken();
-    vi.mocked(downloadSafePublicImage).mockResolvedValue({
-      buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
-      contentType: "image/png",
-      extension: ".png",
-      finalUrl: new URL("https://cdn.example.com/a.png"),
-    });
-  });
-
-  afterEach(() => {
-    cleanupTestToken();
-    vi.restoreAllMocks();
-  });
-
-  async function upload(args: { name?: string }): Promise<FormData> {
+// M9 (253): the tool reads a local file (tests/must-fix/m9-uploads.test.ts names the file part); it takes no URL.
+describe("ads_upload_ad_image schema", () => {
+  it("has no image_url", () => {
     const server = createMockMcpServer();
     registerCreativeTools(server as never);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        mockFetchResponse({ images: { x: { hash: "h1", url: "https://u", name: "n" } } }),
-      ),
-    );
-    const handler = server._registeredTools.find((t) => t.name === "ads_upload_ad_image")!.handler;
-    await handler({ account_id: "123", image_url: "https://cdn.example.com/a.png", ...args });
-    const init = vi.mocked(fetch).mock.calls[0][1] as { body: FormData };
-    return init.body;
-  }
-
-  it("names the multipart file after the caller's name", async () => {
-    const form = await upload({ name: "promo-octubre" });
-    const part = form.get("filename") as File;
-    expect(part.name).toBe("promo-octubre.png");
-    expect(form.get("name")).toBe("promo-octubre");
-  });
-
-  it("keeps image.png when no name is given", async () => {
-    const form = await upload({});
-    expect((form.get("filename") as File).name).toBe("image.png");
-    expect(form.has("name")).toBe(false);
+    const tool = server._registeredTools.find((t) => t.name === "ads_upload_ad_image")!;
+    expect(Object.keys(tool.schema as Record<string, unknown>)).not.toContain("image_url");
+    expect(Object.keys(tool.schema as Record<string, unknown>)).toContain("path");
   });
 });

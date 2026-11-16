@@ -13,7 +13,7 @@ import {
 } from "../../src/media/safe-video-download.js";
 import { videoMaxBytes } from "../../src/media/video-delivery.js";
 import { registerCreativeTools } from "../../src/tools/creatives.js";
-import { createMockMcpServer, setupTestToken, cleanupTestToken, mockFetchResponse } from "../setup.js";
+import { createMockMcpServer } from "../setup.js";
 
 const PREFIX = "downloads are disabled in this fork:";
 
@@ -77,34 +77,12 @@ describe("M9/M10: no URL downloads", () => {
     expectNoNetwork();
   });
 
-  it("upload image refuses before DNS", async () => {
-    setupTestToken();
-    try {
-      const fetchSpy = vi.fn().mockResolvedValue(mockFetchResponse({ images: {} }));
-      vi.stubGlobal("fetch", fetchSpy);
-      const server = createMockMcpServer();
-      registerCreativeTools(server as never);
-      const handler = server._registeredTools.find((t) => t.name === "ads_upload_ad_image")!.handler;
-      // The handler (src/tools, 253's) lets the refusal propagate; the MCP
-      // server turns a thrown handler error into an error result. Either way
-      // the caller gets the refusal.
-      let text: string;
-      try {
-        const result = (await handler({ account_id: "act_1", image_url: "https://cdn.example.test/a.jpg" })) as {
-          isError?: boolean;
-          content: Array<{ text: string }>;
-        };
-        expect(result.isError).toBe(true);
-        text = JSON.stringify(result.content);
-      } catch (err) {
-        text = (err as Error).message;
-      }
-      expect(text).toContain("downloads are disabled in this fork");
-      expectNoNetwork();
-      for (const call of fetchSpy.mock.calls) expect(String(call[0])).not.toContain("cdn.example.test");
-    } finally {
-      cleanupTestToken();
-    }
+  it("upload image takes no URL: its schema has no image_url (253: a local path)", () => {
+    const server = createMockMcpServer();
+    registerCreativeTools(server as never);
+    const tool = server._registeredTools.find((t) => t.name === "ads_upload_ad_image")!;
+    expect(Object.keys(tool.schema as Record<string, unknown>)).not.toContain("image_url");
+    expect(Object.keys(tool.schema as Record<string, unknown>)).toContain("path");
   });
 
   it("video host env is ignored", () => {
