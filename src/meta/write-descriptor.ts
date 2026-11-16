@@ -946,3 +946,463 @@ export function validateDescriptor(d: unknown): string[] {
   }
   return problems;
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// buildDescriptor: the descriptor of a write, from its request and the fork's own GETs (contract §3, §3.1, §3.2).
+// Every read is wrapped: a read that throws or answers no object is null, and what it would have given is null
+// (or, for a listing, a fail-closed entry), so the guard refuses wherever its rules need the value.
+
+/** A Graph GET, injected so the builder reads through the client's own read path. */
+export type GraphGet = <T>(path: string, params: Record<string, string | number>) => Promise<T>;
+
+/** A write as the client is about to send it, its params decoded (objects, not form strings). */
+export interface WriteRequest {
+  method: "POST" | "DELETE";
+  path: string;
+  params: Readonly<Record<string, unknown>>;
+}
+
+export interface BuildContext {
+  tool: string;
+  validateOnly: boolean;
+  requestId: string;
+  /** The ad accounts this session has read; a Page post's write lands in the one account when there is one. */
+  accounts: ReadonlySet<string>;
+}
+
+type Obj = Record<string, unknown>;
+
+const OBJECT_FIELDS: Readonly<Partial<Record<ObjectType, string>>> = {
+  campaign: "account_id,status,effective_status,name,spend_cap,buying_type,daily_budget,lifetime_budget,stop_time",
+  adset: "account_id,status,campaign_id,daily_budget,lifetime_budget,end_time",
+  ad: "account_id,status,adset_id,campaign_id,creative{id}",
+  creative: "account_id",
+  study: "business{id}",
+};
+const CAMPAIGN_FIELDS = "account_id,name,spend_cap,effective_status,buying_type";
+const ACCOUNT_FIELDS = "spend_cap,amount_spent,currency";
+// Rule 10's bounds: the ads of a copy and the cells of a study.
+const COPY_ADS_BOUND = 200;
+const STUDY_CELLS_BOUND = 50;
+const LIST_LIMIT = 100;
+// Contract §3.2: how each identity field's id is resolved, and which owner key carries it.
+type Resolution = { fields: string; owner: (a: Obj) => unknown };
+const RESOLVE: Readonly<Partial<Record<IdentityField, Resolution>>> = (() => {
+  const itself: Resolution = { fields: "id", owner: (a) => a.id };
+  const nested = (key: string): Resolution => ({
+    fields: `${key}{id}`,
+    owner: (a) => (isObj(a[key]) ? (a[key] as Obj).id : undefined),
+  });
+  return {
+    "object_story_spec.page_id": itself,
+    "promoted_object.page_id": itself,
+    object_id: itself,
+    object_story_id: nested("from"),
+    "object_story_spec.link_data.call_to_action.value.lead_gen_form_id": nested("page"),
+    "object_story_spec.video_data.call_to_action.value.lead_gen_form_id": nested("page"),
+    "object_story_spec.instagram_user_id": itself,
+    instagram_user_id: itself,
+    instagram_actor_id: itself,
+    source_instagram_media_id: nested("owner"),
+  };
+})();
+// A creative GET's own names for two §3.2 fields.
+const CREATIVE_READ_ALIASES: ReadonlyArray<[string, IdentityField]> = [
+  ["actor_id", "object_story_spec.page_id"],
+  ["effective_object_story_id", "object_story_id"],
+];
+
+// A Graph id: digits, or `<digits>_<digits>` for a Page post. Nothing else is put in a GET path.
+const GRAPH_ID = /^\d{1,30}(_\d{1,30})?$/;
+const idString = (x: unknown): string | null =>
+  typeof x === "string" && x.length > 0 ? x : Number.isSafeInteger(x) && (x as number) >= 0 ? String(x) : null;
+const graphId = (x: unknown): string | null => {
+  const s = idString(x);
+  return s !== null && GRAPH_ID.test(s) ? s : null;
+};
+const actOf = (x: unknown): string | null => {
+  const s = idString(x);
+  if (s === null) return null;
+  if (/^act_\d+$/.test(s)) return s;
+  return /^\d+$/.test(s) ? `act_${s}` : null;
+};
+const strOrNull = (x: unknown): string | null => (typeof x === "string" && x.length > 0 ? x : null);
+const statusOf = (x: unknown): ObjectStatus | null => (STATUSES.includes(x as string) ? (x as ObjectStatus) : null);
+const effectiveOf = (x: unknown): EffectiveStatus | null =>
+  EFFECTIVE_STATUSES.includes(x as string) ? (x as EffectiveStatus) : null;
+const has = (o: Readonly<Obj>, k: string): boolean => Object.hasOwn(o, k);
+
+// Rule 11: a value the builder would read inside must be readable, or the write is refused. A bounded object
+// (§5.1) or an inline creative's bounded object is an object or an array of objects; `creative` is an object;
+// `cells` and `objectives` are arrays of objects; no object inside any of them has an empty key.
+function assertReadable(params: Readonly<Obj>): void {
+  const refuse = (key: string): never => {
+    throw new WriteRefusal(`${key} is not an object`);
+  };
+  const emptyKey = (x: unknown): boolean =>
+    Array.isArray(x) ? x.some(emptyKey) : isObj(x) && Object.entries(x).some(([k, v]) => k === "" || emptyKey(v));
+  const objects = (x: unknown): boolean => isObj(x) || (Array.isArray(x) && x.every(isObj));
+  const check = (key: string, value: unknown, ok: boolean): void => {
+    if (!ok || emptyKey(value)) refuse(key);
+  };
+  for (const [key, value] of Object.entries(params)) {
+    if (key === "cells" || key === "objectives") check(key, value, Array.isArray(value) && value.every(isObj));
+    else if (key === "creative") {
+      check(key, value, isObj(value));
+      for (const [ck, cv] of Object.entries(value as Obj)) if (SUB_KEYS.has(ck)) check(`creative.${ck}`, cv, objects(cv));
+    } else if (SUB_KEYS.has(key)) check(key, value, objects(value));
+  }
+}
+
+// Every value at a dotted path, through arrays at any step.
+function valuesAt(value: unknown, path: readonly string[]): unknown[] {
+  if (Array.isArray(value)) return value.flatMap((v) => valuesAt(v, path));
+  if (path.length === 0) return [value];
+  if (!isObj(value) || !has(value, path[0])) return [];
+  return valuesAt(value[path[0]], path.slice(1));
+}
+
+// The items of a Graph list or a nested edge ({data: [...]}), or a plain array.
+const listItems = (x: unknown): unknown[] =>
+  Array.isArray(x) ? x : isObj(x) && Array.isArray(x.data) ? (x.data as unknown[]) : [];
+const hasMore = (x: unknown): boolean => isObj(x) && isObj(x.paging) && Boolean((x.paging as Obj).next);
+
+/** Builds the contract §3 descriptor of a write: Task 2's derivations over the request and the fork's GETs. */
+export async function buildDescriptor(req: WriteRequest, ctx: BuildContext, get: GraphGet): Promise<Descriptor> {
+  const params = req.params;
+  assertReadable(params);
+  const pkeys = paramsKeys(params);
+
+  // One GET, wrapped: a throw or an answer that is not an object is null. Repeated reads share one answer.
+  const cache = new Map<string, Promise<Obj | null>>();
+  const readOnce = (path: string, query: Record<string, string | number>): Promise<Obj | null> =>
+    get<unknown>(path, query).then(
+      (a) => (isObj(a) ? a : null),
+      () => null,
+    );
+  const read = (path: string, query: Record<string, string | number>): Promise<Obj | null> => {
+    const key = `${path}?${JSON.stringify(query)}`;
+    let p = cache.get(key);
+    if (!p) {
+      p = readOnce(path, query);
+      cache.set(key, p);
+    }
+    return p;
+  };
+  const readId = (id: unknown, fields: string): Promise<Obj | null> => {
+    const g = graphId(id);
+    return g === null ? Promise.resolve(null) : read(`/${g}`, { fields });
+  };
+  // Every item of a paged list, as readList pages it (rule 10): complete only when Meta ends it within the bound.
+  const readListing = async (path: string, fields: string, bound: number): Promise<{ items: unknown[]; complete: boolean }> => {
+    const items: unknown[] = [];
+    const cursors = new Set<string>();
+    let after: string | undefined;
+    for (let page = 0; page <= bound; page++) {
+      const query: Record<string, string | number> = { fields, limit: LIST_LIMIT };
+      if (after !== undefined) query.after = after;
+      const res = await readOnce(path, query);
+      if (!res || !Array.isArray(res.data)) return { items, complete: false };
+      items.push(...res.data);
+      if (items.length > bound) return { items, complete: false };
+      if (!hasMore(res)) return { items, complete: true };
+      const cursor = isObj(res.paging) && isObj((res.paging as Obj).cursors) ? ((res.paging as Obj).cursors as Obj).after : undefined;
+      if (typeof cursor !== "string" || cursor === "" || cursors.has(cursor)) return { items, complete: false };
+      cursors.add(cursor);
+      after = cursor;
+    }
+    return { items, complete: false };
+  };
+
+  // ---- rule 1: path and object ----
+  const segments = req.path.replace(/^\/(v\d+\.\d+\/)?/, "").split("/");
+  const node = segments[0] ?? "";
+  const pathAct = /^act_\d+$/.test(node) ? node : null;
+  const expected = TOOL_EXPECTED_TYPES[ctx.tool];
+  const m16 = (id: string, type: ObjectType): never => {
+    const types = expected ? expected.join(" or ") : "non-account object";
+    throw new WriteRefusal(`${ctx.tool} expects a ${types}, ${id} is a ${type}`);
+  };
+  // Rule 2 (M16, P2-4): only an account tool writes an account node.
+  if (pathAct && segments.length === 1 && !ACCOUNT_TOOLS.has(ctx.tool)) m16(pathAct, "account");
+
+  const anyRow = matchEndpoint(req.method, req.path, "other");
+  const createdType = anyRow ? CREATED_TYPE[anyRow.id] : undefined;
+  let object: Descriptor["object"];
+  let row: EndpointRow | null;
+  if (createdType) {
+    object = { type: createdType, id: null, created: true };
+    row = anyRow;
+  } else {
+    const meta = pathAct ? await read(`/${pathAct}`, { metadata: 1, fields: "id" }) : graphId(node) ? await read(`/${node}`, { metadata: 1, fields: "id" }) : null;
+    const type = objectTypeOf(meta && isObj(meta.metadata) ? (meta.metadata as Obj).type : undefined);
+    object = { type, id: node || null, created: false };
+    row = matchEndpoint(req.method, req.path, type);
+    // Rule 2 (M16): a tool that names its object type writes only that type.
+    if (expected && !expected.includes(type)) m16(node, type);
+  }
+
+  // ---- rule 3: the object's own fields ----
+  const objectFields = OBJECT_FIELDS[object.type];
+  const facts: Obj | null = !object.created && objectFields ? await readId(object.id, objectFields) : null;
+
+  // ---- rule 4: status ----
+  const before = object.created ? null : statusOf(facts?.status);
+  let after: ObjectStatus | null;
+  if (has(params, "status")) after = statusOf(params.status);
+  else if (has(params, "status_option")) {
+    const option = params.status_option;
+    after = option === "ACTIVE" || option === "PAUSED" ? option : option === "INHERITED_FROM_SOURCE" ? before : null;
+  } else after = before;
+  const status = { before, after };
+
+  // ---- rule 8: campaigns ----
+  const isCampaignObject = (id: string): boolean => !object.created && object.type === "campaign" && object.id === id;
+  const nullCampaign = (id: string | null, role: CampaignRole): CampaignEntry => ({
+    id,
+    account_id: null,
+    created: false,
+    role,
+    spend_cap_minor_before: null,
+    spend_cap_minor_after: null,
+    name: null,
+    status_after: null,
+    buying_type: null,
+  });
+  const readCampaign = async (id: string, role: CampaignRole): Promise<CampaignEntry> => {
+    const c = await readId(id, CAMPAIGN_FIELDS);
+    if (!c) return nullCampaign(id, role);
+    const cap = minorAmount(c.spend_cap);
+    const own = isCampaignObject(id);
+    return {
+      id,
+      account_id: actOf(c.account_id),
+      created: false,
+      role,
+      spend_cap_minor_before: cap,
+      spend_cap_minor_after: own && has(params, "spend_cap") ? minorAmount(params.spend_cap) : cap,
+      name: strOrNull(c.name),
+      status_after: own && has(params, "status") ? status.after : effectiveOf(c.effective_status),
+      buying_type: strOrNull(c.buying_type),
+    };
+  };
+  const createdCampaign = (role: CampaignRole, accountId: string | null, fromParams: boolean): CampaignEntry => ({
+    id: null,
+    account_id: accountId,
+    created: true,
+    role,
+    spend_cap_minor_before: null,
+    spend_cap_minor_after: fromParams ? minorAmount(params.spend_cap) : null,
+    name: null,
+    status_after: fromParams ? statusOf(params.status) : status.after,
+    buying_type: fromParams ? strOrNull(params.buying_type) : null,
+  });
+  // An ad set's campaign id, by GET.
+  const campaignOfAdset = async (adsetId: unknown): Promise<string | null> =>
+    idString((await readId(adsetId, "campaign_id"))?.campaign_id);
+  // The written object's own campaign: itself, or an ad set's or ad's campaign_id.
+  const ownCampaign = (): string | null =>
+    object.type === "campaign" ? object.id : object.type === "adset" || object.type === "ad" ? idString(facts?.campaign_id) : null;
+
+  const roles: readonly CampaignRole[] =
+    row && row.kind !== "other"
+      ? row.roles
+      : object.type === "campaign"
+        ? ["self"]
+        : object.type === "adset" || object.type === "ad"
+          ? ["parent"]
+          : [];
+  const campaigns: CampaignEntry[] = [];
+  for (const role of roles) {
+    if (role === "self") {
+      if (object.created && object.type === "campaign") campaigns.push(createdCampaign("self", pathAct, true));
+      else {
+        const id = object.type === "budget_schedule" ? graphId(node) : ownCampaign();
+        if (id) campaigns.push(await readCampaign(id, "self"));
+      }
+    } else if (role === "parent") {
+      let id: string | null = null;
+      if (!object.created) id = ownCampaign();
+      else if (object.type === "adset") id = idString(params.campaign_id);
+      else if (object.type === "ad") id = await campaignOfAdset(params.adset_id);
+      if (id) campaigns.push(await readCampaign(id, "parent"));
+    } else if (role === "destination") {
+      if (object.type === "campaign") {
+        campaigns.push(createdCampaign("destination", actOf(facts?.account_id), false));
+      } else {
+        const id = has(params, "campaign_id")
+          ? idString(params.campaign_id)
+          : has(params, "adset_id")
+            ? await campaignOfAdset(params.adset_id)
+            : ownCampaign();
+        if (id) campaigns.push(await readCampaign(id, "destination"));
+      }
+    } else {
+      campaigns.push(...(await studyCampaigns()));
+    }
+  }
+
+  // Study cells (rule 8, rule 10): the body's cells, and an existing study's cells by listing.
+  async function studyCampaigns(): Promise<CampaignEntry[]> {
+    const ids: Array<string | null> = [];
+    const fromCell = async (cell: unknown, listed: boolean): Promise<void> => {
+      if (!isObj(cell)) return void ids.push(null);
+      for (const c of listItems(cell.campaigns)) ids.push(idString(isObj(c) ? c.id : c));
+      for (const a of listItems(cell.adsets)) {
+        ids.push(listed ? idString(isObj(a) ? a.campaign_id : undefined) : await campaignOfAdset(isObj(a) ? a.id : a));
+      }
+      // A nested edge Meta cut short: its other campaigns are unknown.
+      if (hasMore(cell.campaigns) || hasMore(cell.adsets)) ids.push(null);
+    };
+    for (const cell of Array.isArray(params.cells) ? params.cells : []) await fromCell(cell, false);
+    if (!object.created) {
+      const listing = await readListing(`/${graphId(object.id) ?? "0"}/cells`, "campaigns{id},adsets{campaign_id}", STUDY_CELLS_BOUND);
+      for (const cell of listing.items) await fromCell(cell, true);
+      if (!listing.complete) ids.push(null);
+    }
+    const out: CampaignEntry[] = [];
+    const seen = new Set<string>();
+    for (const id of ids) {
+      const key = id ?? "";
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(id === null ? nullCampaign(null, "study-cell") : await readCampaign(id, "study-cell"));
+    }
+    return out;
+  }
+
+  // ---- rule 6: ad_account ----
+  let adAccount: string | null = pathAct ?? actOf(facts?.account_id);
+  if (!adAccount) {
+    if (object.type === "study") adAccount = campaigns.find((c) => c.role === "study-cell")?.account_id ?? null;
+    else if (object.type === "page_post") adAccount = ctx.accounts.size === 1 ? actOf([...ctx.accounts][0]) : null;
+    else adAccount = campaigns.find((c) => c.role === "self" || c.role === "parent")?.account_id ?? null;
+  }
+
+  // ---- rule 7: the account ----
+  const acct = adAccount ? await read(`/${adAccount}`, { fields: ACCOUNT_FIELDS }) : null;
+  const account = { spend_cap_minor: minorAmount(acct?.spend_cap), amount_spent_minor: minorAmount(acct?.amount_spent) };
+
+  // ---- rule 5: budget ----
+  const budget: Descriptor["budget"] = {
+    currency: typeof acct?.currency === "string" && /^[A-Z]{3}$/.test(acct.currency) ? acct.currency : null,
+    kind_before: null,
+    kind_after: null,
+    before_minor: null,
+    after_minor: null,
+    end_time: null,
+  };
+  if (object.type === "campaign" || object.type === "adset") {
+    if (facts) {
+      const daily = minorAmount(facts.daily_budget);
+      const lifetime = minorAmount(facts.lifetime_budget);
+      const dailyIn = has(facts, "daily_budget") && facts.daily_budget !== null;
+      const lifetimeIn = has(facts, "lifetime_budget") && facts.lifetime_budget !== null;
+      if ((daily ?? 0) > 0 !== (lifetime ?? 0) > 0) {
+        [budget.kind_before, budget.before_minor] = (daily ?? 0) > 0 ? ["daily", daily] : ["lifetime", lifetime];
+      } else if ((daily ?? 0) === 0 && (lifetime ?? 0) === 0 && dailyIn !== lifetimeIn) {
+        [budget.kind_before, budget.before_minor] = dailyIn ? ["daily", daily] : ["lifetime", lifetime];
+      }
+    }
+    const dailySent = has(params, "daily_budget");
+    const lifetimeSent = has(params, "lifetime_budget");
+    if (dailySent && !lifetimeSent) [budget.kind_after, budget.after_minor] = ["daily", minorAmount(params.daily_budget)];
+    else if (lifetimeSent && !dailySent) [budget.kind_after, budget.after_minor] = ["lifetime", minorAmount(params.lifetime_budget)];
+    else if (!dailySent && !lifetimeSent) [budget.kind_after, budget.after_minor] = [budget.kind_before, budget.before_minor];
+    const end = has(params, "end_time") ? params.end_time : params.stop_time;
+    budget.end_time = strOrNull(end) ?? (Number.isSafeInteger(end) ? String(end) : null);
+  }
+
+  // ---- rule 9: identity ----
+  const identity: IdentityEntry[] = [];
+  const entryKeys = new Set<string>();
+  const add = (e: IdentityEntry): void => {
+    const key = `${e.field}|${e.via}|${e.id}`;
+    if (entryKeys.has(key)) return;
+    entryKeys.add(key);
+    identity.push(e);
+  };
+  const unresolvedCreative = (id: string, via: IdentityVia): IdentityEntry => ({
+    field: "creative_id",
+    via,
+    id,
+    owner_page: null,
+    owner_ig: null,
+  });
+  const resolve = async (field: IdentityField, via: IdentityVia, value: unknown): Promise<void> => {
+    const id = idString(value);
+    if (id === null) return;
+    const ownerKey = OWNER_KEY[field];
+    const how = RESOLVE[field];
+    let owner: string | null = null;
+    if (ownerKey && how) {
+      const a = await readId(id, how.fields);
+      owner = a ? idString(how.owner(a)) : null;
+    }
+    add({
+      field,
+      via,
+      id,
+      owner_page: ownerKey === "owner_page" ? owner : null,
+      owner_ig: ownerKey === "owner_ig" ? owner : null,
+    });
+  };
+  const fromRequest = async (source: unknown, fields: readonly IdentityField[], via: IdentityVia): Promise<void> => {
+    for (const field of fields) for (const v of valuesAt(source, field.split("."))) await resolve(field, via, v);
+  };
+  // A creative read by GET (contract §3.2 creative_id, source_ad): each identity field it holds is an entry; a
+  // failed read, or a spec holding a key or path no key set admits, also makes the creative itself one.
+  const fromCreative = async (creativeId: unknown, via: IdentityVia): Promise<void> => {
+    const cid = idString(creativeId);
+    if (cid === null) return;
+    const spec = graphId(cid) === null ? null : await read(`/${cid}`, { fields: CREATIVE_READ_FIELDS });
+    if (!spec) return add(unresolvedCreative(cid, via));
+    await fromRequest(spec, IDENTITY_FIELDS.creative, via);
+    for (const [key, field] of CREATIVE_READ_ALIASES) if (has(spec, key)) await resolve(field, via, spec[key]);
+    if (!admittedCreativeSpec(spec)) add(unresolvedCreative(cid, via));
+  };
+
+  await fromRequest(params, IDENTITY_FIELDS.direct, "direct");
+  if (has(params, "creative_id")) await fromCreative(params.creative_id, "creative_id");
+  if (isObj(params.creative)) {
+    await fromRequest(params.creative, IDENTITY_FIELDS.creative, "creative");
+    if (has(params.creative, "creative_id")) await fromCreative(params.creative.creative_id, "creative_id");
+  }
+  if (row?.id === "POST /{id}/copies" && object.id) {
+    const source = object.id;
+    if (object.type === "ad") {
+      const cid = isObj(facts?.creative) ? (facts.creative as Obj).id : undefined;
+      if (idString(cid) === null) add(unresolvedCreative(source, "source_ad"));
+      else await fromCreative(cid, "source_ad");
+    } else {
+      const listing = await readListing(`/${graphId(source) ?? "0"}/ads`, "creative{id}", COPY_ADS_BOUND);
+      for (const ad of listing.items) {
+        const cid = isObj(ad) && isObj(ad.creative) ? ad.creative.id : undefined;
+        if (idString(cid) === null) add(unresolvedCreative(source, "source_ad"));
+        else await fromCreative(cid, "source_ad");
+      }
+      if (!listing.complete) add(unresolvedCreative(source, "source_ad"));
+    }
+  }
+
+  // ---- rule 12: assembly ----
+  const derived = { identity, params_keys: pkeys, status, object, path: req.path };
+  return {
+    v: CONTRACT_VERSION,
+    request_id: ctx.requestId,
+    tool: ctx.tool,
+    method: req.method,
+    path: req.path,
+    params_keys: pkeys,
+    ad_account: adAccount,
+    account,
+    object,
+    status,
+    budget,
+    campaigns,
+    identity,
+    kind: deriveKind(row, derived),
+    account_limit: deriveAccountLimit(row, derived),
+    validate_only: pkeys.includes("execution_options"),
+  };
+}
