@@ -837,13 +837,12 @@ export function registerAdSetTools(server: McpServer): void {
   server.registerTool(
     "ads_create_ad_set",
     {
-      description: `${WRITE_WARNING}Create a new ad set within a campaign. Requires targeting specification, optimization goal, and destination_type (required for ODAX campaigns). Budget belongs at exactly one level: when the parent campaign has either daily_budget or lifetime_budget (campaign budget / CBO), omit both ad-set budget fields. Only pass daily_budget or lifetime_budget here for ad-set budget / ABO campaigns. Common destination_type values: WEBSITE (traffic/sales to website), APP (app installs), MESSENGER/WHATSAPP/INSTAGRAM_DIRECT (messaging), ON_AD (lead forms, instant experiences). Ad sets are created in PAUSED status by default. When age, gender, custom audiences or detailed targeting are not default and not relaxed, set targeting.targeting_automation.advantage_audience to 1 or 0 explicitly or Meta rejects the ad set.`,
+      description: `${WRITE_WARNING}Create a new ad set within a campaign. Requires targeting specification, optimization goal, and destination_type (required for ODAX campaigns). Budget belongs at exactly one level: when the parent campaign has either daily_budget or lifetime_budget (campaign budget / CBO), omit both ad-set budget fields. Only pass daily_budget or lifetime_budget here for ad-set budget / ABO campaigns. Common destination_type values: WEBSITE (traffic/sales to website), APP (app installs), MESSENGER/WHATSAPP/INSTAGRAM_DIRECT (messaging), ON_AD (lead forms, instant experiences). Ad sets are always created PAUSED; turn one on with ads_update_ad_set status ACTIVE, which the spend guard checks. When age, gender, custom audiences or detailed targeting are not default and not relaxed, set targeting.targeting_automation.advantage_audience to 1 or 0 explicitly or Meta rejects the ad set.`,
       inputSchema: {
         account_id: z.string().describe("Ad account ID"),
         campaign_id: z.string().describe("Parent campaign ID"),
         name: z.string().min(1).describe("Ad set name"),
         destination_type: destinationTypeEnum.describe("Where the ad traffic is directed. Required for ODAX campaigns. Common values: WEBSITE (website traffic/conversions), APP (app installs), MESSENGER (Messenger conversations), WHATSAPP (WhatsApp conversations), INSTAGRAM_DIRECT (Instagram DMs), ON_AD (lead forms, instant experiences, post engagement), ON_VIDEO (video views), ON_PAGE (page engagement), SHOP_AUTOMATIC (shop)"),
-        status: z.enum(["ACTIVE", "PAUSED"]).default("PAUSED"),
         daily_budget: z.number().optional().describe(`Ad-set daily budget ${MINOR_UNIT_NOTE}. Omit when the parent campaign has a daily or lifetime budget.`),
         lifetime_budget: z.number().optional().describe("Ad-set lifetime budget, in the same unit as daily_budget. Omit when the parent campaign has a daily or lifetime budget."),
         optimization_goal: optimizationGoalEnum.describe("Optimization goal"),
@@ -870,7 +869,7 @@ export function registerAdSetTools(server: McpServer): void {
       annotations: { ...CREATE },
     },
     async ({
-      account_id, campaign_id, name, destination_type, status, daily_budget, lifetime_budget,
+      account_id, campaign_id, name, destination_type, daily_budget, lifetime_budget,
       optimization_goal, billing_event, bid_amount, bid_strategy, targeting,
       start_time, end_time, promoted_object, is_dynamic_creative,
       dsa_beneficiary, dsa_payor, attribution_spec, frequency_control_specs,
@@ -882,7 +881,7 @@ export function registerAdSetTools(server: McpServer): void {
         campaign_id: campaignIdValidated,
         name,
         destination_type,
-        status,
+        status: "PAUSED",
         optimization_goal,
         billing_event,
         targeting: JSON.stringify(targeting),
@@ -908,7 +907,7 @@ export function registerAdSetTools(server: McpServer): void {
         content: [
           {
             type: "text",
-            text: `Ad set created successfully!\nID: ${result.id}\nName: ${name}\nCampaign: ${campaignIdValidated}\nStatus: ${status}\nOptimization: ${optimization_goal}${amountLines}`,
+            text: `Ad set created successfully!\nID: ${result.id}\nName: ${name}\nCampaign: ${campaignIdValidated}\nStatus: PAUSED\nOptimization: ${optimization_goal}${amountLines}`,
           },
         ],
       };

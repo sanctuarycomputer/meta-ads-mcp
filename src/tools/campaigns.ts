@@ -136,14 +136,13 @@ export function registerCampaignTools(server: McpServer): void {
   server.registerTool(
     "ads_create_campaign",
     {
-      description: `${WRITE_WARNING}Create a new Meta advertising campaign. Uses outcome-based (ODAX) objectives. Campaigns are created in PAUSED status by default. Budget belongs at exactly one level: pass daily_budget or lifetime_budget here for a campaign budget, or omit both and set budgets on each ad set. For ad-set budgets Meta requires an explicit is_adset_budget_sharing_enabled; this tool sends false unless you pass true.`,
+      description: `${WRITE_WARNING}Create a new Meta advertising campaign. Uses outcome-based (ODAX) objectives. Campaigns are always created PAUSED; turn one on with ads_update_campaign status ACTIVE, which the spend guard checks. Budget belongs at exactly one level: pass daily_budget or lifetime_budget here for a campaign budget, or omit both and set budgets on each ad set. For ad-set budgets Meta requires an explicit is_adset_budget_sharing_enabled; this tool sends false unless you pass true.`,
       inputSchema: {
         account_id: z.string().describe("Ad account ID"),
         name: z.string().min(1).max(400).describe("Campaign name"),
         objective: objectiveEnum.describe(
           "Campaign objective (OUTCOME_AWARENESS, OUTCOME_TRAFFIC, OUTCOME_ENGAGEMENT, OUTCOME_LEADS, OUTCOME_SALES, OUTCOME_APP_PROMOTION)",
         ),
-        status: z.enum(["ACTIVE", "PAUSED"]).default("PAUSED"),
         special_ad_categories: z
           .array(specialAdCategoryEnum)
           .default(["NONE"])
@@ -176,7 +175,6 @@ export function registerCampaignTools(server: McpServer): void {
       account_id,
       name,
       objective,
-      status,
       special_ad_categories,
       daily_budget,
       lifetime_budget,
@@ -191,7 +189,7 @@ export function registerCampaignTools(server: McpServer): void {
       const body: Record<string, unknown> = {
         name,
         objective,
-        status,
+        status: "PAUSED",
         special_ad_categories: JSON.stringify(special_ad_categories.filter((category) => category !== "NONE")),
         buying_type,
       };
@@ -225,7 +223,7 @@ export function registerCampaignTools(server: McpServer): void {
         content: [
           {
             type: "text",
-            text: `Campaign created successfully!\nID: ${result.id}\nName: ${name}\nObjective: ${objective}\nStatus: ${status}${budgetSharingLine}${amountLines}`,
+            text: `Campaign created successfully!\nID: ${result.id}\nName: ${name}\nObjective: ${objective}\nStatus: PAUSED${budgetSharingLine}${amountLines}`,
           },
         ],
       };

@@ -204,13 +204,12 @@ export function registerAdTools(server: McpServer): void {
   server.registerTool(
     "ads_create_ad",
     {
-      description: `${WRITE_WARNING}Create a new ad within an ad set using an existing creative. Ads are created in PAUSED status by default.`,
+      description: `${WRITE_WARNING}Create a new ad within an ad set using an existing creative. Ads are always created PAUSED; turn one on with ads_update_ad status ACTIVE, which the spend guard checks.`,
       inputSchema: {
         account_id: z.string().describe("Ad account ID"),
         name: z.string().min(1).describe("Ad name"),
         ad_set_id: z.string().describe("Ad set ID to place this ad in"),
         creative_id: z.string().describe("Creative ID to use for this ad"),
-        status: z.enum(["ACTIVE", "PAUSED"]).default("PAUSED"),
         tracking_specs: z
           .array(z.record(z.string(), z.unknown()))
           .optional()
@@ -230,7 +229,7 @@ export function registerAdTools(server: McpServer): void {
       },
       annotations: { ...CREATE },
     },
-    async ({ account_id, name, ad_set_id, creative_id, status, tracking_specs, conversion_domain, ad_labels, flexible_format }) => {
+    async ({ account_id, name, ad_set_id, creative_id, tracking_specs, conversion_domain, ad_labels, flexible_format }) => {
       const accountPath = normalizeAccountId(account_id);
       const adSetIdValidated = validateMetaId(ad_set_id, "adset");
       const creativeIdValidated = validateMetaId(creative_id, "creative");
@@ -253,7 +252,7 @@ export function registerAdTools(server: McpServer): void {
         name,
         adset_id: adSetIdValidated,
         creative: JSON.stringify({ creative_id: creativeIdValidated }),
-        status,
+        status: "PAUSED",
       };
 
       if (tracking_specs) body.tracking_specs = JSON.stringify(tracking_specs);
@@ -267,7 +266,7 @@ export function registerAdTools(server: McpServer): void {
         content: [
           {
             type: "text",
-            text: `Ad created successfully!\nID: ${result.id}\nName: ${name}\nAd Set: ${adSetIdValidated}\nCreative: ${creativeIdValidated}\nStatus: ${status}${flexible_format ? `\nFlexible format: ${flexible_format.groups.length} group(s); Meta picks the format per placement.` : ""}`,
+            text: `Ad created successfully!\nID: ${result.id}\nName: ${name}\nAd Set: ${adSetIdValidated}\nCreative: ${creativeIdValidated}\nStatus: PAUSED${flexible_format ? `\nFlexible format: ${flexible_format.groups.length} group(s); Meta picks the format per placement.` : ""}`,
           },
         ],
       };
