@@ -1,13 +1,14 @@
 // validate_only and the tool result rules (ticket 253, Task 6; spec §Design "validate_only results", "Result order",
 // spec-3 S3-2 and S3-3): served tools through createServer, an in-memory MCP client, and the real gate (RealWriteGate
 // and a GuardRunner running tests/fixtures/meta-ads-guard/stubs/record-allow.mjs), never tests/setup-write-gate.ts.
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createServer } from "../../src/server.js";
 import { cleanupTestToken, mockFetchResponse, setupTestToken } from "../setup.js";
 import {
   ADSET, BUSINESS, CAMP, LABEL, NOT_SENT, NO_WRITE, connect, descriptors, dropGuard, fake, formOf, graphError,
-  installFetch, smallWorld, textOf, useGuard, writes, type ToolResult,
+  guardLog, installFetch, smallWorld, textOf, useGuard, writes, type ToolResult,
 } from "./validate-only-helpers.js";
 
 // The singleton every tool uses, with the real gate in place of setup-write-gate.ts's pass-through one.
@@ -194,6 +195,15 @@ describe("rule 3 and rule 4", () => {
     expect(textOf(r)).toBe(`Campaign ${CAMP} updated successfully.\nChanges: {"name":"renamed"}`);
   });
 
+  it("an outcome the guard does not ack stays in the validate_only result", async () => {
+    useGuard(guard.env, "NACK");
+    const r = await call("ads_update_campaign", { campaign_id: CAMP, name: "renamed", validate_only: true });
+    expect(r.content).toEqual([
+      { type: "text", text: [`POST /${CAMP} sent with validate_only`, `Meta's answer: {"success":true}`, LABEL.documented].join("\n") },
+      { type: "text", text: `guard outcome record for ${descriptors()[0].request_id} was not acknowledged` },
+    ]);
+  });
+
   it("an outcome the guard does not ack appears as a line after the handler's result", async () => {
     useGuard(guard.env, "NACK");
     const r = await call("ads_update_campaign", { campaign_id: CAMP, name: "renamed" });
@@ -204,5 +214,32 @@ describe("rule 3 and rule 4", () => {
       { type: "text", text: `Campaign ${CAMP} updated successfully.\nChanges: {"name":"renamed"}` },
       { type: "text", text: `guard outcome record for ${id} was not acknowledged` },
     ]);
+  });
+});
+
+describe("Meta's answer is scrubbed before it is text", () => {
+  // A credential that is not the server's own token, so only the by-key and quoted-field scrubs can remove it.
+  const foreign = ["foreign", "credential", "value", String(process.pid)].join("-");
+
+  it.each([
+    ["at the top", { success: true, access_token: foreign }, '{"success":true,"access_token":"[REDACTED]"}'],
+    ["nested", { success: true, data: { pages: [{ id: "1", access_token: foreign }] } }, '{"success":true,"data":{"pages":[{"id":"1","access_token":"[REDACTED]"}]}}'],
+    // A credential-named field holding an object: only the scrub by key, on the parsed answer, removes it.
+    ["as an object", { success: true, client_secret: { value: foreign } }, '{"success":true,"client_secret":"[REDACTED]"}'],
+  ])("the answer line, a credential %s", async (_where, answer, line) => {
+    fake.onWrite = () => mockFetchResponse(answer);
+    const r = await call("ads_update_campaign", { campaign_id: CAMP, name: "renamed", validate_only: true });
+    expect(textOf(r)).not.toContain(foreign);
+    expect(textOf(r).split("\n")[1]).toBe(`Meta's answer: ${line}`);
+  });
+
+  it("the error line, a credential quoted in Meta's message", async () => {
+    fake.onWrite = () => graphError(`Invalid parameter {"access_token":"${foreign}"}`);
+    const r = await call("ads_update_campaign", { campaign_id: CAMP, name: "renamed", validate_only: true });
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).not.toContain(foreign);
+    expect(textOf(r).split("\n")[1]).toContain('{"access_token":"[REDACTED]"}');
+    // The outcome record the guard got carries the same scrubbed error.
+    expect(readFileSync(guardLog(), "utf8")).not.toContain(foreign);
   });
 });

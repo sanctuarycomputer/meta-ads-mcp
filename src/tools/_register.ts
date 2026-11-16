@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
+import { closeCall, validateOnlyHeld } from "../meta/client.js";
 import { callContext, newCallContext, type CallContext, type SentWrite } from "../meta/write-guard.js";
 
 /**
@@ -97,7 +98,7 @@ const errorResult = (e: unknown): TextResult => ({ content: [text(e instanceof E
  * a refusal; a write sent under validate_only; validate_only with nothing sent; else the handler's own result.
  * Every outcome warning the guard left unacknowledged is added as a line.
  */
-function shapeResult(ctx: CallContext, stopped: boolean, settled: { ok: true; value: unknown } | { ok: false; error: unknown }): unknown {
+function shapeResult(ctx: CallContext, settled: { ok: true; value: unknown } | { ok: false; error: unknown }): unknown {
   const warnings = ctx.warnings.length > 0 ? [text(ctx.warnings.join("\n"))] : [];
 
   if (ctx.refusal !== null) {
@@ -112,7 +113,7 @@ function shapeResult(ctx: CallContext, stopped: boolean, settled: { ok: true; va
       w.ok ? `Meta's answer: ${w.answer}` : `Meta's error: ${w.answer}`,
       labelLine(w),
     ]);
-    if (stopped) lines.push(VALIDATE_ONLY_NOT_SENT);
+    if (validateOnlyHeld(ctx)) lines.push(VALIDATE_ONLY_NOT_SENT);
     return { content: [text(lines.join("\n")), ...warnings], ...(ctx.sent.some((w) => !w.ok) ? { isError: true } : {}) };
   }
 
@@ -123,7 +124,7 @@ function shapeResult(ctx: CallContext, stopped: boolean, settled: { ok: true; va
     return { ...r, content: [...r.content, ...extra] };
   }
   if (extra.length === 0) return settled.value;
-  const r = settled.value as TextResult;
+  const r = (settled.value ?? {}) as TextResult;
   return { ...r, content: [...(r.content ?? []), ...extra] };
 }
 
@@ -135,27 +136,15 @@ function guardedHandler(name: string, handler: Handler, hadSchema: boolean): Han
   return async (args: unknown, extra: unknown) => {
     const { validate_only, ...rest } = (args ?? {}) as Record<string, unknown>;
     const ctx = newCallContext(name, validate_only === true);
-    // The client reads validateOnlyStop before each write and refuses the write when it is set: a read that finds
-    // it set is a write the stop kept back, which the result names (rule 2's not-sent line).
-    let stop = false;
-    let stopped = false;
-    Object.defineProperty(ctx, "validateOnlyStop", {
-      enumerable: true,
-      get: () => {
-        if (stop) stopped = true;
-        return stop;
-      },
-      set: (v: boolean) => {
-        stop = v;
-      },
-    });
     let settled: { ok: true; value: unknown } | { ok: false; error: unknown };
     try {
       settled = { ok: true, value: await callContext.run(ctx, () => (hadSchema ? handler(rest, extra) : handler(extra))) };
     } catch (error) {
       settled = { ok: false, error };
     }
-    return shapeResult(ctx, stopped, settled);
+    // The result is shaped from the context as it is now: a write the handler left running must not go out later.
+    closeCall(ctx);
+    return shapeResult(ctx, settled);
   };
 }
 

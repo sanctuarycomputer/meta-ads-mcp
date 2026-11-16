@@ -33,6 +33,7 @@ vi.mock("../../src/meta/client.js", async (orig) => {
 const WRITE_LIST = "campaigns:write,adsets:write,ads:write,creatives:write,abtesting:write";
 const ENV_KEYS = ["META_ADS_TOOLSETS", "META_ADS_READ_ONLY"] as const;
 const saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
+let late: Promise<unknown> | undefined;
 const refused = (detail: string) => `MCP error -32600: write refused: ${detail}`;
 
 async function callOn(server: McpServer, name: string, args: Record<string, unknown>): Promise<ToolResult> {
@@ -59,6 +60,15 @@ function testServer(): McpServer {
     await metaApiClient.postForm(`/${CAMP}`, { name: "a" });
     await metaApiClient.postForm(`/${CAMP}`, { method: "DELETE" });
     return { content: [{ type: "text", text: "unreachable" }] };
+  });
+  filter.registerTool("test_write_then_throw", { inputSchema: {}, annotations: { ...UPDATE } }, async () => {
+    await metaApiClient.postForm(`/${CAMP}`, { name: "a" });
+    throw new Error("the handler failed after its write");
+  });
+  // Starts a write it does not await, and returns.
+  filter.registerTool("test_late_write", { inputSchema: {}, annotations: { ...UPDATE } }, async () => {
+    late = new Promise((resolve) => setTimeout(resolve, 20)).then(() => metaApiClient.postForm(`/${CAMP}`, { name: "late" }));
+    return { content: [{ type: "text", text: "returned" }] };
   });
   filter.registerTool("test_no_write", { inputSchema: {}, annotations: { ...UPDATE } }, async () => ({
     content: [{ type: "text", text: "nothing to do" }],
@@ -106,6 +116,14 @@ describe("rule 1: a refusal wins", () => {
     expect(textOf(r)).toBe(`${refused("guard denied: stub refuses ads_update_campaign")}\nwrites sent before it: none`);
   });
 
+  it("a guard's reason quoting a credential reaches the caller scrubbed", async () => {
+    const foreign = ["foreign", "credential", "value", String(process.pid)].join("-");
+    useGuard(guard.env, "REFUSE_TOOL=ads_update_campaign", `REFUSE_REASON={"access_token":"${foreign}"}`);
+    const r = await call("ads_update_campaign", { campaign_id: CAMP, name: "renamed" });
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toBe(`${refused('guard denied: {"access_token":"[REDACTED]"}')}\nwrites sent before it: none`);
+  });
+
   it("ads_create_ad_study refused by the guard: the caller sees the guard's reason, not 'answer was lost' (S4)", async () => {
     useGuard(guard.env, "REFUSE_TOOL=ads_create_ad_study");
     const r = await call("ads_create_ad_study", {
@@ -142,6 +160,43 @@ describe("rule 1: a refusal wins", () => {
     expect(textOf(r)).toBe(
       `${refused("a parameter named method would override the HTTP method")}\nwrites sent before it:\nPOST /${CAMP}`,
     );
+  });
+});
+
+describe("unacknowledged outcome records stay in the result", () => {
+  const unacked = () => `guard outcome record for ${descriptors()[0].request_id} was not acknowledged`;
+
+  it("in a refusal after a sent write", async () => {
+    useGuard(guard.env, "NACK");
+    const r = await callOn(testServer(), "test_write_then_refused", {});
+    expect(writes()).toHaveLength(1);
+    expect(r.isError).toBe(true);
+    expect(r.content).toEqual([
+      { type: "text", text: `${refused("a parameter named method would override the HTTP method")}\nwrites sent before it:\nPOST /${CAMP}` },
+      { type: "text", text: unacked() },
+    ]);
+  });
+
+  it("in a handler's error after its write", async () => {
+    useGuard(guard.env, "NACK");
+    const r = await callOn(testServer(), "test_write_then_throw", {});
+    expect(writes()).toHaveLength(1);
+    expect(r.isError).toBe(true);
+    expect(r.content).toEqual([
+      { type: "text", text: "the handler failed after its write" },
+      { type: "text", text: unacked() },
+    ]);
+  });
+});
+
+describe("a closed call", () => {
+  it.each([[false], [true]])("a write started by a handler that already returned is refused and not sent (validate_only %s)", async (vo) => {
+    late = undefined;
+    const r = await callOn(testServer(), "test_late_write", { validate_only: vo });
+    expect(r.content[0]).toEqual({ type: "text", text: "returned" });
+    await expect(late).rejects.toThrow(refused("the tool call already returned"));
+    expect(writes()).toHaveLength(0);
+    expect(descriptors()).toHaveLength(0);
   });
 });
 

@@ -13,7 +13,7 @@ import {
 import type { MetaApiError, MetaApiResponse } from "./types/common.js";
 import { collectAllPages } from "./paginator.js";
 import { assertMetaApiVersion, resolveMetaApiVersion } from "./api-version.js";
-import { scrubCredentialsDeep, scrubErrorCredentials } from "../utils/scrub-credentials.js";
+import { isCredentialName, scrubCredentialsDeep, scrubErrorCredentials } from "../utils/scrub-credentials.js";
 import { ENDPOINTS, WriteRefusal, type GraphGet } from "./write-descriptor.js";
 import { RealWriteGate, callContext, type CallContext, type WriteGate } from "./write-guard.js";
 
@@ -193,10 +193,24 @@ const firstRefusal = new WeakMap<CallContext, WriteRefusal>();
 // A refusal is the call's refusal: the first one is kept on the context (contract §10: the tool returns the reason).
 function noted<E>(ctx: CallContext | undefined, e: E): E {
   if (ctx && e instanceof WriteRefusal && ctx.refusal === null) {
-    ctx.refusal = e.message;
+    ctx.refusal = scrubbedText(e.message);
     firstRefusal.set(ctx, e);
   }
   return e;
+}
+
+// Calls whose validate-only stop refused a later write (rule 2's not-sent line), and calls whose result is shaped.
+const heldCalls = new WeakSet<CallContext>();
+const closedCalls = new WeakSet<CallContext>();
+
+/** Whether the validate-only stop refused a write of this call (the write was held back, not sent). */
+export function validateOnlyHeld(ctx: CallContext): boolean {
+  return heldCalls.has(ctx);
+}
+
+/** Marks a call finished: its result is shaped, so any write it still makes is refused (nothing could report it). */
+export function closeCall(ctx: CallContext): void {
+  closedCalls.add(ctx);
 }
 
 // Decoding a write's params can refuse it (unreadable JSON): that refusal is the call's too.
@@ -563,6 +577,7 @@ export class MetaApiClient {
     multipartNames?: readonly string[],
   ): Promise<T> {
     const ctx = callContext.getStore();
+    if (ctx && closedCalls.has(ctx)) throw new WriteRefusal("the tool call already returned");
     try {
       checkRequestShape(method, this.baseUrl, this.joined(path), decoded, multipartNames);
     } catch (e) {
@@ -576,6 +591,7 @@ export class MetaApiClient {
 
     if (ctx && ctx.refusal !== null) throw firstRefusal.get(ctx) ?? new WriteRefusal("an earlier write in this call was refused");
     if (ctx?.validateOnlyStop) {
+      heldCalls.add(ctx);
       throw new WriteRefusal("validate_only: later steps need the first write's result and were not sent");
     }
 
@@ -610,7 +626,7 @@ export class MetaApiClient {
     const metaId = answer !== null && typeof answer === "object" && typeof (answer as { id?: unknown }).id === "string"
       ? (answer as { id: string }).id
       : null;
-    ctx?.sent.push({ method, path: reqPath, label: gate.label, ok: true, answer: scrubbedText(JSON.stringify(answer) ?? "") });
+    ctx?.sent.push({ method, path: reqPath, label: gate.label, ok: true, answer: scrubbedAnswer(answer) });
     await this.recordOutcome(ctx, gate.requestId, { ok: true, metaId, error: null });
     return result;
   }
@@ -961,6 +977,8 @@ export class MetaApiClient {
 type SentWriteLabel = CallContext["sent"][number]["label"];
 
 // A message for the outcome record and the call's list of writes: one line, no credential, no token.
+const QUOTED_FIELD = /"([^"\\]{1,64})"\s*:\s*"(?:[^"\\]|\\.)*"/g;
+
 function scrubbedText(text: string): string {
   let token: string | undefined;
   try {
@@ -968,7 +986,9 @@ function scrubbedText(text: string): string {
   } catch {
     token = undefined;
   }
-  let out = scrubCredentialsDeep(text, token);
+  // A credential-named field quoted as JSON inside the text ("access_token":"…"), which the name=value scrub misses.
+  let out = scrubCredentialsDeep(text, token).replace(QUOTED_FIELD, (m, name: string) =>
+    isCredentialName(name) ? `"${name}":"[REDACTED]"` : m);
   // The proof too, where it stands bare (not as appsecret_proof=…, which the scrub already removes).
   const secret = process.env.META_APP_SECRET?.trim();
   if (token && secret) {
@@ -976,6 +996,17 @@ function scrubbedText(text: string): string {
     out = out.split(proof).join("[REDACTED]");
   }
   return out.replace(/\s+/g, " ").trim();
+}
+
+/** Meta's answer to a write as one line of text: scrubbed as JSON (credential-named fields by key) and then as text. */
+function scrubbedAnswer(answer: unknown): string {
+  let token: string | undefined;
+  try {
+    token = getAccessToken();
+  } catch {
+    token = undefined;
+  }
+  return scrubbedText(JSON.stringify(withoutToken(answer, token)) ?? "");
 }
 
 function scrubbedMessage(e: unknown): string {
