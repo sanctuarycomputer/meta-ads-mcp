@@ -349,7 +349,7 @@ describe("P8: execution_options on the wire under validate_only, equal to the de
     expect(formKeys(body)).toEqual([...descriptors()[0].params_keys].sort());
   });
 
-  it("postMultipart: the string, appended to the caller's form, its names equal to params_keys", async () => {
+  it("postMultipart: the string, in the new FormData sent (not the caller's form), its names equal to params_keys", async () => {
     const client = clientWith(stub("record", log));
     // The file under name, a key of POST /{campaign_id}'s set (M11 refuses any other after the allow).
     const form = new FormData();

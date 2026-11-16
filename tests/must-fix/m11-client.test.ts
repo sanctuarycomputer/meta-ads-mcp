@@ -422,6 +422,46 @@ describe("lastWriteFate", () => {
     expect(writes()).toHaveLength(2);
   });
 
+  it("a 404: failed", async () => {
+    onWrite = () => mockFetchResponse({ message: "no such object" }, { status: 404 });
+    expect(await fateOf(campaignUpdate)).toBe("failed");
+  });
+
+  it("is sticky: a DELETE whose first attempt times out and whose resend answers 400 stays unknown", async () => {
+    vi.spyOn(MetaApiClient.prototype as unknown as { backoff: () => Promise<void> }, "backoff").mockResolvedValue(undefined);
+    let n = 0;
+    onWrite = (c) =>
+      ++n === 1
+        ? new Promise<Response>((_, reject) => {
+          c.init?.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+        })
+        : mockFetchResponse({ error: { code: 100, type: "OAuthException", message: "does not exist" } }, { status: 400 });
+    expect(await fateOf((c) => c.delete(`/${CAMP}`), { timeout: 50, maxRetries: 1 })).toBe("unknown");
+    expect(writes()).toHaveLength(2);
+  });
+
+  it("is sticky: a 500 and then a resend answering 400 stays unknown", async () => {
+    vi.spyOn(MetaApiClient.prototype as unknown as { backoff: () => Promise<void> }, "backoff").mockResolvedValue(undefined);
+    let n = 0;
+    onWrite = () =>
+      ++n === 1
+        ? mockFetchResponse({ message: "busy" }, { status: 500 })
+        : mockFetchResponse({ message: "bad" }, { status: 400 });
+    expect(await fateOf((c) => c.delete(`/${CAMP}`), { maxRetries: 1 })).toBe("unknown");
+    expect(writes()).toHaveLength(2);
+  });
+
+  it("a retried 4xx and then a 400: failed (every attempt sent was answered with a 4xx)", async () => {
+    vi.spyOn(MetaApiClient.prototype as unknown as { backoff: () => Promise<void> }, "backoff").mockResolvedValue(undefined);
+    let n = 0;
+    onWrite = () =>
+      ++n === 1
+        ? mockFetchResponse({ error: { code: 2, type: "OAuthException", message: "transient" } }, { status: 400 })
+        : mockFetchResponse({ message: "bad" }, { status: 400 });
+    expect(await fateOf((c) => c.delete(`/${CAMP}`), { maxRetries: 1 })).toBe("failed");
+    expect(writes()).toHaveLength(2);
+  });
+
   it("success: ok", async () => {
     expect(await fateOf(campaignUpdate)).toBe("ok");
   });

@@ -83,3 +83,29 @@ describe("signGraphRequest trims the token it sends and signs", () => {
     expect(new URL(String(sentUrl)).searchParams.get("appsecret_proof")).toBe(proofOf(PAGE));
   });
 });
+
+describe("readPageToken (spec check 1): its own checks", () => {
+  beforeEach(() => {
+    setupTestToken(`user-${"y".repeat(24)}`);
+    metaApiClient.resetForTests();
+  });
+  afterEach(() => {
+    cleanupTestToken();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("returns no token when Meta answers a non-string access_token", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(mockFetchResponse({ id: "6001", access_token: 6001 })));
+
+    expect(await metaApiClient.readPageToken("6001")).toBe("");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["me/accounts", "me", "6001/accounts", "act_6001", ""])("refuses the page id %j before any request", async (pageId) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockFetchResponse({ id: "6001", access_token: PAGE })));
+
+    await expect(metaApiClient.readPageToken(pageId)).rejects.toThrow(/page id must be digits/);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});

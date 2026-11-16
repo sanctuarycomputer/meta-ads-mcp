@@ -249,6 +249,8 @@ export interface NotSentWrite {
   error: string;
 }
 
+const isClientError = (status: number | null) => status !== null && status >= 400 && status < 500;
+
 /** What became of a write past the gate (see `lastWriteFate`). */
 export type WriteFate = "ok" | "failed" | "unknown" | "not-sent";
 
@@ -263,8 +265,9 @@ export function notSentOf(ctx: CallContext): readonly NotSentWrite[] {
 
 /**
  * The fate of the call's most recent write past the gate: `not-sent` when it never reached `fetch`; `failed` when
- * the last answer was a 4xx; `unknown` when it reached `fetch` and threw with no answer (timeout, abort, transport
- * error), after a 5xx, or after any other answer it could not use (a 2xx whose body would not read); `ok` on
+ * every attempt sent was answered with a 4xx; `unknown` when any attempt reached `fetch` and ended with no answer
+ * (timeout, abort, transport error), a 5xx, or any other answer it could not use (a 2xx whose body would not read),
+ * even if a resend then answered 4xx; `ok` on
  * success; `null` when no write of the call got past the gate (a refusal from the shape check or the gate shows as
  * the call's refusal instead).
  */
@@ -272,10 +275,15 @@ export function lastWriteFate(ctx: CallContext): WriteFate | null {
   return writeFates.get(ctx) ?? null;
 }
 
-/** What `execute` tells its caller about the wire: whether `fetch` was reached, and the last answer's HTTP status. */
+/**
+ * What `execute` tells its caller about the wire: whether `fetch` was reached, the last answer's HTTP status, and
+ * whether an earlier attempt reached `fetch` and ended without a 4xx (no answer, a 5xx, an unreadable answer): that
+ * attempt may have written, so the write's fate stays unknown whatever a resend answers.
+ */
 interface Wire {
   fetched: boolean;
   status: number | null;
+  lost: boolean;
 }
 
 /** Whether the validate-only stop refused a write of this call (the write was held back, not sent). */
@@ -615,6 +623,7 @@ export class MetaApiClient {
    * Meta answered without one. Only `withPageToken` calls it (a static test asserts it).
    */
   async readPageToken(pageId: string, scope?: RequestScope): Promise<string> {
+    if (!/^\d+$/.test(pageId)) throw new Error("readPageToken: the page id must be digits only.");
     const path = `/${pageId}`;
     const params = { fields: "access_token" };
     const url = this.buildUrl("GET", path, params);
@@ -712,7 +721,7 @@ export class MetaApiClient {
     }
 
     let result: T;
-    const wire: Wire = { fetched: false, status: null };
+    const wire: Wire = { fetched: false, status: null, lost: false };
     try {
       result = await this.execute<T>(method, encoded.url, path, params, encoded.init, scope, wire);
     } catch (e) {
@@ -727,7 +736,7 @@ export class MetaApiClient {
         }
       } else {
         ctx?.sent.push({ method, path: reqPath, label: gate.label, ok: false, answer: error });
-        if (ctx) writeFates.set(ctx, wire.status !== null && wire.status >= 400 && wire.status < 500 ? "failed" : "unknown");
+        if (ctx) writeFates.set(ctx, !wire.lost && isClientError(wire.status) ? "failed" : "unknown");
       }
       await this.recordOutcome(ctx, gate.requestId, { ok: false, metaId: null, error });
       throw noted(ctx, e);
@@ -883,6 +892,7 @@ export class MetaApiClient {
 
         // Past here the request may reach Meta: whatever happens next is not "not sent".
         if (wire) {
+          if (wire.fetched && !isClientError(wire.status)) wire.lost = true;
           wire.fetched = true;
           wire.status = null;
         }
