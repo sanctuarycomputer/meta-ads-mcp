@@ -309,6 +309,8 @@ class Exit extends Error {
 }
 
 describe("refusals through src/index.ts (check 1.2)", () => {
+  // A cold load of src/index.ts can pass vitest's 5 s default on a loaded host.
+  vi.setConfig({ testTimeout: 30_000 });
   const saved = { argv: process.argv, toolsets: process.env.META_ADS_TOOLSETS, readOnly: process.env.META_ADS_READ_ONLY };
   afterEach(() => {
     process.argv = saved.argv;

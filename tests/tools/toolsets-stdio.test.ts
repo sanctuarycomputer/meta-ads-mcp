@@ -14,11 +14,16 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { isStdioTransport } from "../../src/utils/transport-mode.js";
 
+// A cold load of src/index.ts (the whole tool tree) can pass vitest's 5 s default on a
+// loaded host; the launch helper's own 10 s race must be what fires first.
+vi.setConfig({ testTimeout: 30_000 });
+
 const state = vi.hoisted(() => ({
   httpLoaded: 0,
   firestoreConstructed: 0,
   started: [] as string[],
   listed: [] as string[],
+  skills: undefined as undefined | { instructions: unknown; prompts: unknown; resources: unknown },
   pino: [] as Array<{ options: unknown; destination: unknown }>,
   httpFactory: undefined as undefined | (() => McpServer),
   httpPort: undefined as undefined | number,
@@ -32,6 +37,8 @@ vi.mock("../../src/transport/stdio.js", () => ({
     const [a, b] = InMemoryTransport.createLinkedPair();
     await Promise.all([server.connect(b), client.connect(a)]); // runs initialize
     state.listed = (await client.listTools()).tools.map((t) => t.name);
+    const caps = client.getServerCapabilities() ?? {};
+    state.skills = { instructions: client.getInstructions(), prompts: caps.prompts, resources: caps.resources };
     await client.close();
     await server.close();
     state.settle("stdio");
@@ -96,6 +103,7 @@ beforeEach(() => {
   state.firestoreConstructed = 0;
   state.started = [];
   state.listed = [];
+  state.skills = undefined;
   state.pino = [];
   state.httpFactory = undefined;
   state.httpPort = undefined;
@@ -155,6 +163,7 @@ describe("stdio startup touches no network, Firestore, HTTP module or stdout (ch
     expect(state.started).toEqual(["stdio"]);
     expect(state.listed).toContain("ads_get_campaigns"); // initialize and tools/list ran
     expect(state.listed).toHaveLength(34); // the env's selection (unset: the read default), not the catalogue
+    expect(state.skills).toEqual({ instructions: undefined, prompts: undefined, resources: undefined }); // fails closed
     expect(listen).not.toHaveBeenCalled(); // 3.1
     expect(state.firestoreConstructed).toBe(0); // 3.2
     expect(state.httpLoaded).toBe(0); // 3.3
@@ -176,6 +185,9 @@ describe("stdio startup touches no network, Firestore, HTTP module or stdout (ch
     const [a, b] = InMemoryTransport.createLinkedPair();
     await Promise.all([server?.connect(b), client.connect(a)]);
     expect((await client.listTools()).tools).toHaveLength(34);
+    expect(client.getInstructions()).toBeUndefined(); // fails closed
+    expect(client.getServerCapabilities()?.prompts).toBeUndefined();
+    expect(client.getServerCapabilities()?.resources).toBeUndefined();
     await client.close();
     expect(state.pino).toHaveLength(1);
     expect(state.pino[0].destination).toBeUndefined();
