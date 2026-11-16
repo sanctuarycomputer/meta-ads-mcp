@@ -61,7 +61,9 @@ interface CacheEntry {
 }
 
 /**
- * Locates one scraped ad inside an Apify dataset. Reading a dataset is free on
+ * 254 M7: every read goes through apifyApiClient, which refuses, so a lookup
+ * now rejects with ApifyRemovedError before any request. As it was built:
+ * locates one scraped ad inside an Apify dataset. Reading a dataset is free on
  * Apify, so the only cost is latency and our own memory: the scan projects
  * records down to ad_archive_id (fields=) in large pages, remembers the
  * id -> offset map per tenant+dataset (well-formed ids only, bounded), resumes

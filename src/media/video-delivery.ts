@@ -67,19 +67,13 @@ const GRID_COLUMNS = 3;
 const COMPACT_HEIGHT = 480;
 const THUMBNAIL_MAX_BYTES = 4 * MB;
 
-function envInt(name: string, fallback: number): number {
-  const raw = process.env[name]?.trim();
-  if (!raw) return fallback;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
+// 254 M10: fixed at the former defaults; VIDEO_MAX_BYTES and VIDEO_MAX_SECONDS are not read.
 export function videoMaxBytes(): number {
-  return envInt("VIDEO_MAX_BYTES", 150 * MB);
+  return 150 * MB;
 }
 
 export function videoMaxSeconds(): number {
-  return envInt("VIDEO_MAX_SECONDS", 240);
+  return 240;
 }
 
 export interface VideoDeliveryOptions {

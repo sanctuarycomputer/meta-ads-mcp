@@ -51,7 +51,7 @@ export type GeminiKeyInputResult =
  * The key is sent as an HTTP header value, so anything outside printable
  * ASCII — CR/LF above all — is refused here rather than left to the HTTP
  * client. No prefix is required: Google moved from AIza… to AQ.… keys once
- * already, and the live check against the API is the real authority.
+ * already. (254 M7: there is no live check any more; the key is never sent.)
  */
 export function validateGeminiKeyInput(input: unknown): GeminiKeyInputResult {
   if (typeof input !== "string") return { ok: false, reason: "empty" };
@@ -151,13 +151,6 @@ export function createGeminiClient(): GeminiClient {
   return removedClient;
 }
 
-let defaultClient: GeminiClient | undefined;
-
 export function getGeminiClient(): GeminiClient {
-  return defaultClient ?? removedClient;
-}
-
-/** Test seam only: production code never calls it. */
-export function configureGeminiClientForTests(client: GeminiClient | undefined): void {
-  defaultClient = client;
+  return removedClient;
 }

@@ -431,7 +431,7 @@ describe("registerCreativeMediaTools", () => {
     expect(result.content.filter((c) => c.type === "image")).toHaveLength(2);
   });
 
-  it("refuses images resolving to private IPs when wired to the real downloader", async () => {
+  it("refuses every image URL when wired to the real downloader (254 M9)", async () => {
     const download = vi.fn(async (url: string) =>
       downloadSafePublicImage(url, {
         resolve: async () => [{ address: "10.0.0.5" }],
@@ -447,7 +447,8 @@ describe("registerCreativeMediaTools", () => {
 
     const images = resultJson(result).images as Array<Record<string, unknown>>;
     expect(images[0].downloaded).toBe(false);
-    expect(String(images[0].error)).toMatch(/private IP/);
+    // 254 M9: the real downloader refuses before any DNS lookup.
+    expect(String(images[0].error)).toMatch(/^downloads are disabled in this fork:/);
     expect(result.content.filter((c) => c.type === "image")).toHaveLength(0);
   });
 

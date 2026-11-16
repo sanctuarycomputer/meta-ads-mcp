@@ -6,13 +6,9 @@ import {
   configureApifyTokenRepoForTests,
 } from "../../src/store/apify-token-repo.js";
 import { resetKeyCacheForTests } from "../../src/auth/crypto.js";
-import { readFileSync } from "node:fs";
-import { createMockMcpServer, mockFetchResponse } from "../setup.js";
-import type { AdLibraryRawItem } from "../../src/apify/ad-library-schema.js";
+import { createMockMcpServer } from "../setup.js";
 import { configureDatasetLookupForTests, createDatasetLookup } from "../../src/apify/dataset-lookup.js";
 
-const FIXTURES = JSON.parse(readFileSync(new URL("../fixtures/ad-library/items.json", import.meta.url), "utf8")) as AdLibraryRawItem[];
-const [ , , ] = FIXTURES;
 
 // Kept under the 20-char suffix that .gitleaks.toml's apify-api-token rule
 // matches, so this fixture never trips the secret scanner.
@@ -99,12 +95,6 @@ describe("ads_library_* tools", () => {
   describe("ads_library_register_apify_token", () => {
 
     it("does not store the token when validation fails", async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn().mockResolvedValue(
-          mockFetchResponse({ error: { type: "token-not-found" } }, { status: 401 }),
-        ),
-      );
 
       const result = await setup().byName("ads_library_register_apify_token")({
         apify_token: "apify_api_bogus",
@@ -149,7 +139,6 @@ describe("ads_library_* tools", () => {
     });
 
     it("reports none when there is no token anywhere", async () => {
-      delete process.env.APIFY_TOKEN;
       const result = await setup().byName("ads_library_get_apify_token_status")({
         verify: false,
       });
