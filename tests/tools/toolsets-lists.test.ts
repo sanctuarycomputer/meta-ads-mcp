@@ -489,16 +489,18 @@ function aliases(text: string): string[] {
   return out;
 }
 
-/** Client write calls and write-helper references inside a node. */
-function writesIn(node: ts.Node): string[] {
+/** Client write calls and write-helper references inside a node (or, with deep false, at the node itself). */
+function writesIn(node: ts.Node, deep = true): string[] {
   const out: string[] = [];
-  walk(node, (n) => {
+  const check = (n: ts.Node) => {
     if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === "metaApiClient" && WRITE_METHODS.has(n.name.text)) {
       out.push(n.getText());
     } else if (ts.isIdentifier(n) && WRITE_HELPERS.has(n.text)) {
       out.push(n.text);
     }
-  });
+  };
+  if (deep) walk(node, check);
+  else check(node);
   return out;
 }
 
@@ -537,22 +539,58 @@ function bare(e: ts.Expression): ts.Expression {
 
 const isFunctionValue = (e: ts.Expression | undefined): boolean => !!e && (ts.isArrowFunction(bare(e)) || ts.isFunctionExpression(bare(e)));
 
+/** A member of an object literal or class whose value is a function: reached by its own name, not through its holder. */
+const isFunctionMember = (m: ts.Node): boolean =>
+  ts.isMethodDeclaration(m) || ts.isGetAccessorDeclaration(m) || ts.isSetAccessorDeclaration(m)
+  || ((ts.isPropertyAssignment(m) || ts.isPropertyDeclaration(m)) && isFunctionValue(m.initializer));
+
+/** Inside the left side of a destructuring assignment. */
+const inDestructuringTarget = (n: ts.Node): boolean => {
+  for (let c: ts.Node = n, p = n.parent; p; c = p, p = p.parent) {
+    if (ts.isBinaryExpression(p)) return p.left === c && p.operatorToken.kind === ts.SyntaxKind.EqualsToken;
+    if (!ts.isObjectLiteralExpression(p) && !ts.isArrayLiteralExpression(p) && !ts.isPropertyAssignment(p)
+      && !ts.isShorthandPropertyAssignment(p) && !ts.isParenthesizedExpression(p)) return false;
+  }
+  return false;
+};
+
+/**
+ * The member a name selects, if it is in a member position: `x.name`, or a key
+ * of a destructuring (`const { name } = …`, `({ name: v } = …)`), so the member
+ * is found by spelling in whatever object was destructured.
+ */
+function memberKey(n: ts.Identifier | ts.PrivateIdentifier): string | undefined {
+  const p = n.parent;
+  if (ts.isPropertyAccessExpression(p) && p.name === n) return n.text;
+  if (ts.isBindingElement(p) && ts.isObjectBindingPattern(p.parent)) return nameOfKey(p.propertyName ?? p.name);
+  if ((ts.isShorthandPropertyAssignment(p) && p.name === n) || (ts.isPropertyAssignment(p) && inDestructuringTarget(p))) {
+    return inDestructuringTarget(p) ? nameOfKey(p.name) : undefined;
+  }
+  return undefined;
+}
+const nameOfKey = (k: ts.Node): string | undefined => (ts.isIdentifier(k) || ts.isStringLiteral(k) ? k.text : undefined);
+
 /**
  * Writes in the node and in everything in the same file it names, followed
- * transitively two ways at once:
- * - by symbol (the type checker, so by scope): each name's declaration (for a
- *   destructured name, the whole declaration; for a for...of or for...in
- *   binding, the iterated expression), the value a shorthand property stands
- *   for, and every assignment to it, including destructuring assignments and
- *   `??=` and the other assignment operators;
- * - by spelling, for a name the checker can't tie to a value declared in this
- *   file (unresolved, as on an `any` holder, or only a type member): every
- *   function-valued declaration, property or method of that name anywhere in the
- *   file (so a function stored by Object.assign, or in an
- *   object literal, is found whatever holds it), and every function stored
- *   under that name where the checker can't resolve it (`(box as any).h = fn`).
- * A read block that names a holder is not charged with every assignment into it,
- * only with what is stored under the names it uses.
+ * transitively:
+ * - plain names (variables, parameters, functions, classes) by symbol, through
+ *   the type checker, so a local never stands for an unrelated function of the
+ *   same spelling: each name's declaration (for a destructured name, the whole
+ *   declaration; for a for...of or for...in binding, also the iterated
+ *   expression), the value a shorthand property stands for, and every assignment
+ *   to it, including destructuring assignments and `??=` and the other
+ *   assignment operators;
+ * - member names (`x.h`, or a destructuring key), and names the checker can't resolve, also by
+ *   spelling, as the approved check did: every function-valued declaration,
+ *   property, method or accessor of that name anywhere in the file, and the
+ *   value of every assignment to a property of that name (`holder.h = …`,
+ *   `holder["h"] = …`, through casts), so a function put on an object by
+ *   Object.assign, a placeholder filled later, or an override reached through a
+ *   base type is found.
+ * A holder reached by name (an object literal or class) is read without its
+ * function-valued members, which are reached by their own names when used; so
+ * a block calling helpers.r() is not charged with helpers.w(). Type annotations
+ * are not read: a member named only in a type adds nothing.
  */
 function reachableWrites(start: ts.Node, { sf, checker }: Analysed): string[] {
   const bySymbol = new Map<ts.Symbol, ts.Node[]>();
@@ -564,11 +602,8 @@ function reachableWrites(start: ts.Node, { sf, checker }: Analysed): string[] {
 
   walk(sf, (n) => {
     // Function-valued things, by spelling.
-    if (ts.isFunctionDeclaration(n) || ts.isMethodDeclaration(n) || ts.isGetAccessorDeclaration(n) || ts.isSetAccessorDeclaration(n)) {
-      file(bySpelling, nameOf(n.name), n);
-    } else if ((ts.isVariableDeclaration(n) || ts.isPropertyAssignment(n) || ts.isPropertyDeclaration(n)) && isFunctionValue(n.initializer)) {
-      file(bySpelling, nameOf(n.name), n);
-    }
+    if (ts.isFunctionDeclaration(n) || isFunctionMember(n)) file(bySpelling, nameOf((n as ts.NamedDeclaration).name), n);
+    else if (ts.isVariableDeclaration(n) && isFunctionValue(n.initializer)) file(bySpelling, nameOf(n.name), n);
     // Assignments.
     if (!ts.isBinaryExpression(n)) return;
     const op = n.operatorToken.kind;
@@ -582,10 +617,10 @@ function reachableWrites(start: ts.Node, { sf, checker }: Analysed): string[] {
       });
       return;
     }
-    const sym = checker.getSymbolAtLocation(left);
-    if (sym) file(bySymbol, sym, n);
-    // `(box as any).h = fn`: a function stored under a name the checker can't resolve; its value is read.
-    else if (ts.isPropertyAccessExpression(left) && isFunctionValue(n.right)) file(bySpelling, left.name.text, n.right);
+    file(bySymbol, checker.getSymbolAtLocation(left), n);
+    // `holder.h = v`, `holder["h"] = v`: the value, under the property's spelling.
+    if (ts.isPropertyAccessExpression(left)) file(bySpelling, left.name.text, n.right);
+    else if (ts.isElementAccessExpression(left) && ts.isStringLiteralLike(left.argumentExpression)) file(bySpelling, left.argumentExpression.text, n.right);
   });
 
   /** What to read for a declaration: the whole declaration around a binding pattern, and a loop binding's iterable. */
@@ -596,34 +631,45 @@ function reachableWrites(start: ts.Node, { sf, checker }: Analysed): string[] {
     return loop && (ts.isForOfStatement(loop) || ts.isForInStatement(loop)) ? [cur, loop.expression] : [cur];
   };
 
+  /** Walk a reached node: no type annotations, and (outside the block itself) no function-valued members of a holder. */
+  const visit = (node: ts.Node, isStart: boolean, f: (n: ts.Node) => void): void => {
+    const go = (n: ts.Node): void => {
+      if (ts.isTypeNode(n)) return;
+      if (!isStart && n !== node && isFunctionMember(n) && (ts.isObjectLiteralExpression(n.parent) || ts.isClassLike(n.parent))) return;
+      f(n);
+      ts.forEachChild(n, go);
+    };
+    go(node);
+  };
+
   const out: string[] = [];
   const seenSymbols = new Set<ts.Symbol>();
   const seenSpellings = new Set<string>();
-  const queue: Array<[string, ts.Node]> = [["(block)", start]];
-  const enqueue = (label: string, d: ts.Node, from: ts.Node) => {
-    if (d.getSourceFile() === sf && !(d.pos >= from.pos && d.end <= from.end)) queue.push([label, d]);
+  const queue: Array<[string, ts.Node, boolean]> = [["(block)", start, true]];
+  // Each symbol and spelling is followed once, so a declaration is queued at most once per name;
+  // one inside the node being read is queued too, since a holder's function members are skipped there.
+  const enqueue = (label: string, d: ts.Node) => {
+    if (d.getSourceFile() === sf) queue.push([label, d, false]);
   };
   while (queue.length > 0) {
-    const [label, node] = queue.shift() as [string, ts.Node];
-    for (const w of writesIn(node)) out.push(`${label}: ${w}`);
-    walk(node, (n) => {
+    const [label, node, isStart] = queue.shift() as [string, ts.Node, boolean];
+    visit(node, isStart, (n) => {
+      for (const w of writesIn(n, false)) out.push(`${label}: ${w}`);
       if (!ts.isIdentifier(n) && !ts.isPrivateIdentifier(n)) return;
       const syms = [checker.getSymbolAtLocation(n)];
       if (ts.isShorthandPropertyAssignment(n.parent) && n.parent.name === n) syms.push(checker.getShorthandAssignmentValueSymbol(n.parent));
       for (const sym of syms) {
         if (!sym || seenSymbols.has(sym)) continue;
         seenSymbols.add(sym);
-        for (const d of (sym.declarations ?? []).flatMap(declared)) enqueue(sym.name, d, node);
-        for (const d of bySymbol.get(sym) ?? []) enqueue(sym.name, d, node);
+        for (const d of (sym.declarations ?? []).flatMap(declared)) enqueue(sym.name, d);
+        for (const d of bySymbol.get(sym) ?? []) enqueue(sym.name, d);
       }
-      // Spelling stands in only where the checker can't tie the name to a value in this
-      // file (unresolved, as on an `any` holder, or only a type member), so a local of the
-      // same spelling as an unrelated function elsewhere doesn't pull that function in.
-      const vd = syms[0]?.valueDeclaration;
-      const unresolved = !vd || vd.getSourceFile() !== sf || ts.isPropertySignature(vd) || ts.isMethodSignature(vd);
-      if (unresolved && !seenSpellings.has(n.text)) {
-        seenSpellings.add(n.text);
-        for (const d of bySpelling.get(n.text) ?? []) enqueue(n.text, d, node);
+      // Spelling for member names and unresolved names only, so a plain local that
+      // shares a name with an unrelated function elsewhere doesn't pull that function in.
+      const key = memberKey(n) ?? (syms[0] ? undefined : n.text);
+      if (key !== undefined && !seenSpellings.has(key)) {
+        seenSpellings.add(key);
+        for (const d of bySpelling.get(key) ?? []) enqueue(key, d);
       }
     });
   }
@@ -700,6 +746,27 @@ describe("the static check's parser", () => {
 
   it("does not pull in a writing function elsewhere because a local shares its name", () => {
     const text = `export async function sneak() { return metaApiClient.postForm('/x', {}); }\n${reg("const sneak = 1; void sneak;")}`;
+    expect(writes(text)).toEqual([]);
+  });
+
+  it.each([
+    ["a placeholder property filled by Object.assign", `const box = { sneak: undefined as any };\nObject.assign(box, { sneak: async () => { ${W} } });\n${reg("await box.sneak();")}`],
+    ["a class field filled by Object.assign", `class Box { sneak!: () => Promise<unknown>; }\nconst box = new Box();\nObject.assign(box, { sneak: async () => { ${W} } });\n${reg("await box.sneak();")}`],
+    ["an override reached through a base type", `class Base { async sneak(): Promise<unknown> { return 1; } }\nclass Impl extends Base { async sneak() { return metaApiClient.postForm('/x', {}); } }\nlet cur: Base = new Base();\nfunction use(b: Base) { cur = b; }\nuse(new Impl());\n${reg("await cur.sneak();")}`],
+    ["a named function stored on a typed holder", `async function sneak() { ${W} }\nconst holder: { h?: () => Promise<unknown> } = {};\nholder.h = sneak;\n${reg("await holder.h?.();")}`],
+    ["a wrapped function stored on a holder", `const holder: { h?: unknown } = {};\nholder.h = Object.assign(async () => { ${W} }, {});\n${reg("void holder.h;")}`],
+    ["a function stored by string key", `const holder: Record<string, () => Promise<unknown>> = {};\nholder["h"] = async () => { ${W} };\n${reg("await holder.h();")}`],
+    ["a function stored through a cast on the left", `let s: any;\n(s as any) = async () => { ${W} };\n${reg("await s();")}`],
+  ])("finds a write through %s", (_label, text) => {
+    expect(writes(text)).not.toEqual([]);
+  });
+
+  it.each([
+    ["a typed holder with the write stored under another member", `const memo: { v?: number; w?: unknown } = {};\nexport async function other() { memo.w = await metaApiClient.postForm('/x', {}); }\n${reg("void memo.v;")}`],
+    ["a helper object whose other method writes", `const helpers = { async r() { return 1; }, async w() { ${W} } };\n${reg("await helpers.r();")}`],
+    ["a helper class whose other method writes", `class Helpers { async r() { return 1; } async w() { ${W} } }\nconst helpers = new Helpers();\n${reg("await helpers.r();")}`],
+    ["a member named only in a type", `interface T { w: () => void }\nexport async function w() { ${W} }\n${reg("const t: T | undefined = undefined; void t;")}`],
+  ])("charges nothing for %s", (_label, text) => {
     expect(writes(text)).toEqual([]);
   });
 
