@@ -1,0 +1,74 @@
+{
+  "name": "vo-mismatch",
+  "covers": [
+    "vo-mismatch"
+  ],
+  "decided_by": "rule 8",
+  "why": "validate_only true without execution_options in params_keys",
+  "for": "both",
+  "brand_status": {
+    "usb": "ready"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000097",
+    "tool": "ads_update_ad_set",
+    "method": "POST",
+    "path": "/9995000000000097",
+    "params_keys": [
+      "status"
+    ],
+    "ad_account": "act_9990000000000001",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "adset",
+      "id": "9995000000000097",
+      "created": false
+    },
+    "status": {
+      "before": "PAUSED",
+      "after": "ACTIVE"
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [
+      {
+        "id": "9994000000000970",
+        "account_id": "act_9990000000000001",
+        "created": false,
+        "role": "parent",
+        "spend_cap_minor_before": 100000,
+        "spend_cap_minor_after": 100000,
+        "name": "sb-usb-h1",
+        "status_after": "ACTIVE",
+        "buying_type": "AUCTION"
+      }
+    ],
+    "identity": [],
+    "kind": "update",
+    "account_limit": false,
+    "validate_only": true
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": false,
+    "reason": "rule 8: unrecognised write: kind update at /9995000000000097",
+    "basis": null,
+    "receipt": "fake-receipt-vo-mismatch"
+  },
+  "reason_has": [
+    "update",
+    "/9995000000000097"
+  ]
+}

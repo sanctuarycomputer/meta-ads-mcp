@@ -1,0 +1,76 @@
+{
+  "name": "account-edge-spend-cap-action",
+  "covers": [
+    "account-edge-spend-cap-action"
+  ],
+  "decided_by": "rule 3",
+  "why": "spend_cap_action on an account edge touches the account limit",
+  "for": "both",
+  "brand_status": {
+    "usb": "ready"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000056",
+    "tool": "ads_create_campaign",
+    "method": "POST",
+    "path": "/act_9990000000000001/campaigns",
+    "params_keys": [
+      "name",
+      "objective",
+      "status",
+      "special_ad_categories",
+      "buying_type",
+      "spend_cap_action"
+    ],
+    "ad_account": "act_9990000000000001",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "campaign",
+      "id": null,
+      "created": true
+    },
+    "status": {
+      "before": null,
+      "after": "PAUSED"
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [
+      {
+        "id": null,
+        "account_id": "act_9990000000000001",
+        "created": true,
+        "role": "self",
+        "spend_cap_minor_before": null,
+        "spend_cap_minor_after": null,
+        "name": null,
+        "status_after": "PAUSED",
+        "buying_type": "AUCTION"
+      }
+    ],
+    "identity": [],
+    "kind": "create",
+    "account_limit": true,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": false,
+    "reason": "rule 3: spend_cap_action on an account edge touches the account limit",
+    "basis": null,
+    "receipt": "fake-receipt-account-edge-spend-cap-action"
+  },
+  "reason_has": []
+}

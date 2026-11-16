@@ -1,0 +1,2110 @@
+{
+  "v": "1.0",
+  "host_list": [
+    "graph.facebook.com"
+  ],
+  "read_post": "^/(v\\d+\\.\\d+/)?(act_\\d+|\\d+)/insights$",
+  "account_limit_keys": {
+    "exact": [
+      "spend_cap_action"
+    ],
+    "prefix": [
+      "funding"
+    ],
+    "contains": [
+      "billing"
+    ],
+    "except": [
+      "billing_event"
+    ],
+    "spend_cap_allowed_rows": [
+      "POST /act_{id}/campaigns"
+    ]
+  },
+  "rows": [
+    {
+      "id": "POST /act_{id}",
+      "method": "POST",
+      "path": "/{act}",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "always",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /act_{id}/campaigns",
+      "method": "POST",
+      "path": "/{act}/campaigns",
+      "object_type": "any",
+      "kind": "create",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "by-keys",
+      "roles": [
+        "self"
+      ],
+      "validate_only": "documented",
+      "creative_bearing": "never",
+      "keys": {
+        "paused-create": [
+          "name",
+          "objective",
+          "status",
+          "special_ad_categories",
+          "special_ad_category_country",
+          "buying_type",
+          "bid_strategy",
+          "daily_budget",
+          "lifetime_budget",
+          "spend_cap",
+          "is_adset_budget_sharing_enabled",
+          "start_time",
+          "stop_time",
+          "execution_options"
+        ],
+        "live-create": [
+          "name",
+          "objective",
+          "status",
+          "special_ad_categories",
+          "special_ad_category_country",
+          "buying_type",
+          "bid_strategy",
+          "daily_budget",
+          "lifetime_budget",
+          "spend_cap",
+          "is_adset_budget_sharing_enabled",
+          "start_time",
+          "stop_time",
+          "execution_options"
+        ]
+      }
+    },
+    {
+      "id": "POST /act_{id}/adsets",
+      "method": "POST",
+      "path": "/{act}/adsets",
+      "object_type": "any",
+      "kind": "create",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "by-keys",
+      "roles": [
+        "parent"
+      ],
+      "validate_only": "documented",
+      "creative_bearing": "never",
+      "keys": {
+        "paused-create": [
+          "name",
+          "campaign_id",
+          "status",
+          "daily_budget",
+          "lifetime_budget",
+          "bid_amount",
+          "bid_strategy",
+          "bid_constraints",
+          "billing_event",
+          "optimization_goal",
+          "promoted_object",
+          "targeting",
+          "start_time",
+          "end_time",
+          "destination_type",
+          "attribution_spec",
+          "pacing_type",
+          "is_dynamic_creative",
+          "dsa_beneficiary",
+          "dsa_payor",
+          "frequency_control_specs",
+          "execution_options"
+        ],
+        "live-create": [
+          "name",
+          "campaign_id",
+          "status",
+          "daily_budget",
+          "lifetime_budget",
+          "bid_amount",
+          "bid_strategy",
+          "bid_constraints",
+          "billing_event",
+          "optimization_goal",
+          "promoted_object",
+          "targeting",
+          "start_time",
+          "end_time",
+          "destination_type",
+          "attribution_spec",
+          "pacing_type",
+          "is_dynamic_creative",
+          "dsa_beneficiary",
+          "dsa_payor",
+          "frequency_control_specs",
+          "execution_options"
+        ]
+      }
+    },
+    {
+      "id": "POST /act_{id}/ads",
+      "method": "POST",
+      "path": "/{act}/ads",
+      "object_type": "any",
+      "kind": "create",
+      "refine": "boost-if-inline-post",
+      "no_campaign": false,
+      "account_limit": "by-keys",
+      "roles": [
+        "parent"
+      ],
+      "validate_only": "documented",
+      "creative_bearing": "if-creative-key",
+      "keys": {
+        "paused-create": [
+          "name",
+          "adset_id",
+          "status",
+          "creative",
+          "creative.creative_id",
+          "creative.name",
+          "creative.object_story_spec",
+          "creative.object_story_id",
+          "creative.source_instagram_media_id",
+          "creative.instagram_user_id",
+          "creative.asset_feed_spec",
+          "creative.url_tags",
+          "creative.degrees_of_freedom_spec",
+          "creative.contextual_multi_ads",
+          "creative.object_id",
+          "creative.call_to_action",
+          "creative.image_crops",
+          "creative.interactive_components_spec",
+          "creative.portrait_customizations",
+          "creative.categorization_criteria",
+          "creative.link_url",
+          "creative.platform_customizations",
+          "creative.adlabels",
+          "conversion_domain",
+          "adlabels",
+          "creative_asset_groups_spec",
+          "execution_options"
+        ],
+        "live-create": [
+          "name",
+          "adset_id",
+          "status",
+          "creative",
+          "creative.creative_id",
+          "creative.name",
+          "creative.object_story_spec",
+          "creative.object_story_id",
+          "creative.source_instagram_media_id",
+          "creative.instagram_user_id",
+          "creative.asset_feed_spec",
+          "creative.url_tags",
+          "creative.degrees_of_freedom_spec",
+          "creative.contextual_multi_ads",
+          "creative.object_id",
+          "creative.call_to_action",
+          "creative.image_crops",
+          "creative.interactive_components_spec",
+          "creative.portrait_customizations",
+          "creative.categorization_criteria",
+          "creative.link_url",
+          "creative.platform_customizations",
+          "creative.adlabels",
+          "conversion_domain",
+          "adlabels",
+          "creative_asset_groups_spec",
+          "execution_options"
+        ],
+        "boost": [
+          "name",
+          "adset_id",
+          "status",
+          "creative",
+          "creative.creative_id",
+          "creative.name",
+          "creative.object_story_spec",
+          "creative.object_story_id",
+          "creative.source_instagram_media_id",
+          "creative.instagram_user_id",
+          "creative.asset_feed_spec",
+          "creative.url_tags",
+          "creative.degrees_of_freedom_spec",
+          "creative.contextual_multi_ads",
+          "creative.object_id",
+          "creative.call_to_action",
+          "creative.image_crops",
+          "creative.interactive_components_spec",
+          "creative.portrait_customizations",
+          "creative.categorization_criteria",
+          "creative.link_url",
+          "creative.platform_customizations",
+          "creative.adlabels",
+          "conversion_domain",
+          "adlabels",
+          "creative_asset_groups_spec",
+          "execution_options"
+        ]
+      }
+    },
+    {
+      "id": "POST /act_{id}/adcreatives",
+      "method": "POST",
+      "path": "/{act}/adcreatives",
+      "object_type": "any",
+      "kind": "create",
+      "refine": null,
+      "no_campaign": true,
+      "account_limit": "by-keys",
+      "roles": [],
+      "validate_only": "documented",
+      "creative_bearing": "always",
+      "keys": {
+        "no-campaign-create": [
+          "name",
+          "object_story_spec",
+          "object_story_id",
+          "source_instagram_media_id",
+          "instagram_user_id",
+          "asset_feed_spec",
+          "url_tags",
+          "degrees_of_freedom_spec",
+          "contextual_multi_ads",
+          "object_id",
+          "call_to_action",
+          "image_crops",
+          "interactive_components_spec",
+          "portrait_customizations",
+          "categorization_criteria",
+          "link_url",
+          "platform_customizations",
+          "adlabels",
+          "execution_options"
+        ]
+      }
+    },
+    {
+      "id": "POST /act_{id}/adimages",
+      "method": "POST",
+      "path": "/{act}/adimages",
+      "object_type": "any",
+      "kind": "create",
+      "refine": null,
+      "no_campaign": true,
+      "account_limit": "by-keys",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {
+        "no-campaign-create": [
+          "bytes",
+          "filename",
+          "name",
+          "execution_options"
+        ]
+      }
+    },
+    {
+      "id": "POST /act_{id}/advideos",
+      "method": "POST",
+      "path": "/{act}/advideos",
+      "object_type": "any",
+      "kind": "create",
+      "refine": null,
+      "no_campaign": true,
+      "account_limit": "by-keys",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {
+        "no-campaign-create": [
+          "file_url",
+          "source",
+          "name",
+          "title",
+          "description",
+          "source_instagram_media_id",
+          "upload_phase",
+          "upload_session_id",
+          "start_offset",
+          "video_file_chunk",
+          "file_size",
+          "execution_options"
+        ]
+      }
+    },
+    {
+      "id": "POST /act_{id}/customaudiences",
+      "method": "POST",
+      "path": "/{act}/customaudiences",
+      "object_type": "any",
+      "kind": "create",
+      "refine": null,
+      "no_campaign": true,
+      "account_limit": "by-keys",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {
+        "no-campaign-create": [
+          "name",
+          "subtype",
+          "origin_audience_id",
+          "lookalike_spec",
+          "description",
+          "execution_options"
+        ]
+      }
+    },
+    {
+      "id": "POST /act_{id}/customconversions",
+      "method": "POST",
+      "path": "/{act}/customconversions",
+      "object_type": "any",
+      "kind": "create",
+      "refine": null,
+      "no_campaign": true,
+      "account_limit": "by-keys",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {
+        "no-campaign-create": [
+          "name",
+          "pixel_id",
+          "rule",
+          "custom_event_type",
+          "default_conversion_value",
+          "description",
+          "event_source_type",
+          "execution_options"
+        ]
+      }
+    },
+    {
+      "id": "POST /act_{id}/adrules_library",
+      "method": "POST",
+      "path": "/{act}/adrules_library",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "by-keys",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /act_{id}/assigned_users",
+      "method": "POST",
+      "path": "/{act}/assigned_users",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "by-keys",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "DELETE /act_{id}/assigned_users",
+      "method": "DELETE",
+      "path": "/{act}/assigned_users",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "by-keys",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{campaign_id}",
+      "method": "POST",
+      "path": "/{id}",
+      "object_type": "campaign",
+      "kind": "update",
+      "refine": "delete-if-status-deleted",
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [
+        "self"
+      ],
+      "validate_only": "documented",
+      "creative_bearing": "never",
+      "keys": {
+        "pause": [
+          "status",
+          "execution_options"
+        ],
+        "delete": [
+          "status",
+          "execution_options"
+        ],
+        "cap-cut-or-first-cap": [
+          "spend_cap",
+          "execution_options"
+        ],
+        "budget-cut": [
+          "daily_budget",
+          "lifetime_budget",
+          "execution_options"
+        ],
+        "edit": [
+          "name",
+          "execution_options"
+        ],
+        "activation": [
+          "status",
+          "execution_options"
+        ],
+        "budget-raise": [
+          "daily_budget",
+          "lifetime_budget",
+          "stop_time",
+          "execution_options"
+        ],
+        "cap-raise": [
+          "spend_cap",
+          "execution_options"
+        ]
+      }
+    },
+    {
+      "id": "POST /{adset_id}",
+      "method": "POST",
+      "path": "/{id}",
+      "object_type": "adset",
+      "kind": "update",
+      "refine": "delete-if-status-deleted",
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [
+        "parent"
+      ],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {
+        "pause": [
+          "status",
+          "execution_options"
+        ],
+        "delete": [
+          "status",
+          "execution_options"
+        ],
+        "budget-cut": [
+          "daily_budget",
+          "lifetime_budget",
+          "execution_options"
+        ],
+        "edit": [
+          "name",
+          "targeting",
+          "execution_options"
+        ],
+        "activation": [
+          "status",
+          "execution_options"
+        ],
+        "budget-raise": [
+          "daily_budget",
+          "lifetime_budget",
+          "end_time",
+          "execution_options"
+        ]
+      }
+    },
+    {
+      "id": "POST /{ad_id}",
+      "method": "POST",
+      "path": "/{id}",
+      "object_type": "ad",
+      "kind": "update",
+      "refine": "delete-if-status-deleted",
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [
+        "parent"
+      ],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "if-creative-key",
+      "keys": {
+        "pause": [
+          "status",
+          "execution_options"
+        ],
+        "delete": [
+          "status",
+          "execution_options"
+        ],
+        "edit": [
+          "name",
+          "creative",
+          "creative.creative_id",
+          "creative.name",
+          "creative.object_story_spec",
+          "creative.object_story_id",
+          "creative.source_instagram_media_id",
+          "creative.instagram_user_id",
+          "creative.asset_feed_spec",
+          "creative.url_tags",
+          "creative.degrees_of_freedom_spec",
+          "creative.contextual_multi_ads",
+          "creative.object_id",
+          "creative.call_to_action",
+          "creative.image_crops",
+          "creative.interactive_components_spec",
+          "creative.portrait_customizations",
+          "creative.categorization_criteria",
+          "creative.link_url",
+          "creative.platform_customizations",
+          "creative.adlabels",
+          "execution_options"
+        ],
+        "activation": [
+          "status",
+          "execution_options"
+        ]
+      }
+    },
+    {
+      "id": "POST /{creative_id}",
+      "method": "POST",
+      "path": "/{id}",
+      "object_type": "creative",
+      "kind": "update",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{study_id}",
+      "method": "POST",
+      "path": "/{id}",
+      "object_type": "study",
+      "kind": "study",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [
+        "study-cell"
+      ],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {
+        "study": [
+          "name",
+          "description",
+          "start_time",
+          "end_time",
+          "cells",
+          "objectives",
+          "type",
+          "confidence_level",
+          "cooldown_start_time",
+          "observation_end_time",
+          "execution_options"
+        ]
+      }
+    },
+    {
+      "id": "POST /{page_post_id}",
+      "method": "POST",
+      "path": "/{id}",
+      "object_type": "page_post",
+      "kind": "post-edit",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{account_id}",
+      "method": "POST",
+      "path": "/{id}",
+      "object_type": "account",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "always",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{other_id}",
+      "method": "POST",
+      "path": "/{id}",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{id}/copies",
+      "method": "POST",
+      "path": "/{id}/copies",
+      "object_type": "any",
+      "kind": "copy",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [
+        "destination"
+      ],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "always",
+      "keys": {
+        "copy": [
+          "adset_id",
+          "campaign_id",
+          "status_option",
+          "rename_options",
+          "deep_copy",
+          "start_time",
+          "end_time",
+          "execution_options"
+        ]
+      }
+    },
+    {
+      "id": "POST /{campaign_id}/budget_schedules",
+      "method": "POST",
+      "path": "/{id}/budget_schedules",
+      "object_type": "any",
+      "kind": "budget-schedule",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [
+        "self"
+      ],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{business_id}/ad_studies",
+      "method": "POST",
+      "path": "/{id}/ad_studies",
+      "object_type": "any",
+      "kind": "study",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [
+        "study-cell"
+      ],
+      "validate_only": "contradicted",
+      "creative_bearing": "never",
+      "keys": {
+        "study": [
+          "name",
+          "description",
+          "start_time",
+          "end_time",
+          "cells",
+          "objectives",
+          "type",
+          "confidence_level",
+          "cooldown_start_time",
+          "observation_end_time",
+          "execution_options"
+        ]
+      }
+    },
+    {
+      "id": "POST /{id}/insights",
+      "method": "POST",
+      "path": "/{id}/insights",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{id}/adaccounts",
+      "method": "POST",
+      "path": "/{id}/adaccounts",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{id}/users",
+      "method": "POST",
+      "path": "/{id}/users",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{id}/comments",
+      "method": "POST",
+      "path": "/{id}/comments",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{id}/leadgen_forms",
+      "method": "POST",
+      "path": "/{id}/leadgen_forms",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{id}/photos",
+      "method": "POST",
+      "path": "/{id}/photos",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{id}/test_leads",
+      "method": "POST",
+      "path": "/{id}/test_leads",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{id}/assigned_users",
+      "method": "POST",
+      "path": "/{id}/assigned_users",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{id}/register",
+      "method": "POST",
+      "path": "/{id}/register",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{id}/deregister",
+      "method": "POST",
+      "path": "/{id}/deregister",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{id}/request_code",
+      "method": "POST",
+      "path": "/{id}/request_code",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{id}/verify_code",
+      "method": "POST",
+      "path": "/{id}/verify_code",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{id}/whatsapp_business_profile",
+      "method": "POST",
+      "path": "/{id}/whatsapp_business_profile",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{id}/message_templates",
+      "method": "POST",
+      "path": "/{id}/message_templates",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{id}/flows",
+      "method": "POST",
+      "path": "/{id}/flows",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{id}/assets",
+      "method": "POST",
+      "path": "/{id}/assets",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{id}/publish",
+      "method": "POST",
+      "path": "/{id}/publish",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{id}/deprecate",
+      "method": "POST",
+      "path": "/{id}/deprecate",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{id}/message_qrdls",
+      "method": "POST",
+      "path": "/{id}/message_qrdls",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "POST /{id}/subscribed_apps",
+      "method": "POST",
+      "path": "/{id}/subscribed_apps",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "DELETE /{campaign_id}",
+      "method": "DELETE",
+      "path": "/{id}",
+      "object_type": "campaign",
+      "kind": "delete",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [
+        "self"
+      ],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {
+        "delete": []
+      }
+    },
+    {
+      "id": "DELETE /{adset_id}",
+      "method": "DELETE",
+      "path": "/{id}",
+      "object_type": "adset",
+      "kind": "delete",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [
+        "parent"
+      ],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {
+        "delete": []
+      }
+    },
+    {
+      "id": "DELETE /{ad_id}",
+      "method": "DELETE",
+      "path": "/{id}",
+      "object_type": "ad",
+      "kind": "delete",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [
+        "parent"
+      ],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {
+        "delete": []
+      }
+    },
+    {
+      "id": "DELETE /{study_id}",
+      "method": "DELETE",
+      "path": "/{id}",
+      "object_type": "study",
+      "kind": "delete",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [
+        "study-cell"
+      ],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {
+        "delete": []
+      }
+    },
+    {
+      "id": "DELETE /{other_id}",
+      "method": "DELETE",
+      "path": "/{id}",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "DELETE /{id}/adaccounts",
+      "method": "DELETE",
+      "path": "/{id}/adaccounts",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "DELETE /{id}/assigned_users",
+      "method": "DELETE",
+      "path": "/{id}/assigned_users",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "DELETE /{id}/message_templates",
+      "method": "DELETE",
+      "path": "/{id}/message_templates",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "DELETE /{id}/subscribed_apps",
+      "method": "DELETE",
+      "path": "/{id}/subscribed_apps",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    },
+    {
+      "id": "DELETE /{id}/message_qrdls/{id}",
+      "method": "DELETE",
+      "path": "/{id}/message_qrdls/{id}",
+      "object_type": "any",
+      "kind": "other",
+      "refine": null,
+      "no_campaign": false,
+      "account_limit": "never",
+      "roles": [],
+      "validate_only": "unconfirmed",
+      "creative_bearing": "never",
+      "keys": {}
+    }
+  ],
+  "sub_keys": {
+    "object_story_spec": [
+      "page_id",
+      "instagram_user_id",
+      "link_data.link",
+      "link_data.message",
+      "link_data.caption",
+      "link_data.name",
+      "link_data.description",
+      "link_data.image_hash",
+      "link_data.picture",
+      "link_data.multi_share_optimized",
+      "link_data.multi_share_end_card",
+      "link_data.page_welcome_message",
+      "link_data.call_to_action.type",
+      "link_data.call_to_action.value.link",
+      "link_data.call_to_action.value.lead_gen_form_id",
+      "link_data.call_to_action.value.app_destination",
+      "link_data.child_attachments.link",
+      "link_data.child_attachments.name",
+      "link_data.child_attachments.description",
+      "link_data.child_attachments.image_hash",
+      "link_data.child_attachments.picture",
+      "link_data.child_attachments.video_id",
+      "link_data.child_attachments.call_to_action.type",
+      "link_data.child_attachments.call_to_action.value.link",
+      "video_data.video_id",
+      "video_data.image_hash",
+      "video_data.image_url",
+      "video_data.message",
+      "video_data.title",
+      "video_data.link_description",
+      "video_data.page_welcome_message",
+      "video_data.call_to_action.type",
+      "video_data.call_to_action.value.link",
+      "video_data.call_to_action.value.lead_gen_form_id",
+      "video_data.call_to_action.value.app_destination"
+    ],
+    "call_to_action": [
+      "type",
+      "value.link"
+    ],
+    "asset_feed_spec": [
+      "images.hash",
+      "images.adlabels.name",
+      "videos.video_id",
+      "videos.thumbnail_hash",
+      "videos.adlabels.name",
+      "bodies.text",
+      "bodies.adlabels.name",
+      "titles.text",
+      "titles.adlabels.name",
+      "descriptions.text",
+      "descriptions.adlabels.name",
+      "link_urls.website_url",
+      "link_urls.display_url",
+      "link_urls.adlabels.name",
+      "call_to_action_types",
+      "ad_formats",
+      "optimization_type",
+      "audios.type",
+      "asset_customization_rules.is_default",
+      "asset_customization_rules.customization_spec.publisher_platforms",
+      "asset_customization_rules.customization_spec.facebook_positions",
+      "asset_customization_rules.customization_spec.instagram_positions",
+      "asset_customization_rules.customization_spec.messenger_positions",
+      "asset_customization_rules.customization_spec.audience_network_positions",
+      "asset_customization_rules.customization_spec.threads_positions",
+      "asset_customization_rules.customization_spec.locales",
+      "asset_customization_rules.image_label.name",
+      "asset_customization_rules.video_label.name",
+      "asset_customization_rules.body_label.name",
+      "asset_customization_rules.title_label.name",
+      "asset_customization_rules.description_label.name",
+      "asset_customization_rules.link_url_label.name"
+    ],
+    "promoted_object": [
+      "page_id",
+      "pixel_id",
+      "custom_event_type"
+    ],
+    "lookalike_spec": [
+      "ratio",
+      "country",
+      "type"
+    ],
+    "objectives": [
+      "name",
+      "type",
+      "is_primary",
+      "adspixels.id",
+      "adspixels.event_names"
+    ]
+  },
+  "coverage": [
+    {
+      "tool": "ads_create_campaign",
+      "group": "campaigns",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{act}/campaigns",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_update_campaign",
+      "group": "campaigns",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "campaign"
+        }
+      ]
+    },
+    {
+      "tool": "ads_delete_campaign",
+      "group": "campaigns",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "campaign"
+        }
+      ]
+    },
+    {
+      "tool": "ads_clone_ad_set_bundle",
+      "group": "adsets",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{act}/adsets",
+          "object_type": "any"
+        },
+        {
+          "method": "POST",
+          "path": "/{id}/copies",
+          "object_type": "any"
+        },
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "ad"
+        },
+        {
+          "method": "POST",
+          "path": "/{act}/adcreatives",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_create_ad_set",
+      "group": "adsets",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{act}/adsets",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_update_ad_set",
+      "group": "adsets",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "adset"
+        }
+      ]
+    },
+    {
+      "tool": "ads_delete_ad_set",
+      "group": "adsets",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "adset"
+        }
+      ]
+    },
+    {
+      "tool": "ads_create_ad",
+      "group": "ads",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{act}/ads",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_update_ad",
+      "group": "ads",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "ad"
+        }
+      ]
+    },
+    {
+      "tool": "ads_update_ad_url_tags",
+      "group": "ads",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{act}/adcreatives",
+          "object_type": "any"
+        },
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "ad"
+        }
+      ]
+    },
+    {
+      "tool": "ads_delete_ad",
+      "group": "ads",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "ad"
+        }
+      ]
+    },
+    {
+      "tool": "ads_create_ad_creative",
+      "group": "creatives",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{act}/adcreatives",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_update_ad_creative",
+      "group": "creatives",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "creative"
+        }
+      ]
+    },
+    {
+      "tool": "ads_upload_ad_image",
+      "group": "creatives",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{act}/adimages",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_upload_ad_video",
+      "group": "creatives",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{act}/advideos",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_update_entity",
+      "group": "entities",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "campaign"
+        },
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "adset"
+        },
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "ad"
+        },
+        {
+          "method": "POST",
+          "path": "/{act}",
+          "object_type": "any"
+        },
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "page_post"
+        },
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "other"
+        }
+      ]
+    },
+    {
+      "tool": "ads_activate_entity",
+      "group": "entities",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "campaign"
+        },
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "adset"
+        },
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "ad"
+        },
+        {
+          "method": "POST",
+          "path": "/{act}",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_create_budget_schedule",
+      "group": "budget",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}/budget_schedules",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_update_spend_cap",
+      "group": "billing",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{act}",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_bulk_create_video_ads",
+      "group": "bulk-ads",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{act}/advideos",
+          "object_type": "any"
+        },
+        {
+          "method": "POST",
+          "path": "/{act}/adcreatives",
+          "object_type": "any"
+        },
+        {
+          "method": "POST",
+          "path": "/{act}/ads",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_update_ad_content",
+      "group": "ad-content",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{act}/adcreatives",
+          "object_type": "any"
+        },
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "ad"
+        },
+        {
+          "method": "DELETE",
+          "path": "/{id}",
+          "object_type": "creative"
+        },
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "page_post"
+        }
+      ]
+    },
+    {
+      "tool": "ads_duplicate_ad",
+      "group": "social-proof",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{act}/ads",
+          "object_type": "any"
+        },
+        {
+          "method": "POST",
+          "path": "/{id}/copies",
+          "object_type": "any"
+        },
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "ad"
+        }
+      ]
+    },
+    {
+      "tool": "ads_boost_ig_post",
+      "group": "instagram",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{act}/ads",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_create_ad_study",
+      "group": "abtesting",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}/ad_studies",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_experiment_abtest_update_test",
+      "group": "abtesting",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "study"
+        },
+        {
+          "method": "DELETE",
+          "path": "/{id}",
+          "object_type": "study"
+        }
+      ]
+    },
+    {
+      "tool": "ads_create_custom_audience",
+      "group": "audiences",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{act}/customaudiences",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_create_lookalike_audience",
+      "group": "audiences",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{act}/customaudiences",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_share_custom_audience",
+      "group": "audiences",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}/adaccounts",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_unshare_custom_audience",
+      "group": "audiences",
+      "requests": [
+        {
+          "method": "DELETE",
+          "path": "/{id}/adaccounts",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_delete_custom_audience",
+      "group": "audiences",
+      "requests": [
+        {
+          "method": "DELETE",
+          "path": "/{id}",
+          "object_type": "audience"
+        }
+      ]
+    },
+    {
+      "tool": "ads_update_custom_audience",
+      "group": "audiences",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "audience"
+        }
+      ]
+    },
+    {
+      "tool": "ads_update_custom_audience_users",
+      "group": "audiences",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}/users",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_create_custom_conversion",
+      "group": "pixels",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{act}/customconversions",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_hide_comment",
+      "group": "comments",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "other"
+        }
+      ]
+    },
+    {
+      "tool": "ads_reply_comment",
+      "group": "comments",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}/comments",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_delete_comment",
+      "group": "comments",
+      "requests": [
+        {
+          "method": "DELETE",
+          "path": "/{id}",
+          "object_type": "other"
+        }
+      ]
+    },
+    {
+      "tool": "ads_create_ad_rule",
+      "group": "rules",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{act}/adrules_library",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_update_ad_rule",
+      "group": "rules",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "other"
+        }
+      ]
+    },
+    {
+      "tool": "ads_delete_ad_rule",
+      "group": "rules",
+      "requests": [
+        {
+          "method": "DELETE",
+          "path": "/{id}",
+          "object_type": "other"
+        }
+      ]
+    },
+    {
+      "tool": "ads_create_async_report",
+      "group": "reports",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}/insights",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_run_report_and_wait",
+      "group": "reports",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}/insights",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_create_lead_form",
+      "group": "leads",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}/leadgen_forms",
+          "object_type": "any"
+        },
+        {
+          "method": "POST",
+          "path": "/{id}/photos",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_update_lead_form",
+      "group": "leads",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "other"
+        }
+      ]
+    },
+    {
+      "tool": "ads_create_test_lead",
+      "group": "leads",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}/test_leads",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_delete_test_lead",
+      "group": "leads",
+      "requests": [
+        {
+          "method": "DELETE",
+          "path": "/{id}",
+          "object_type": "other"
+        }
+      ]
+    },
+    {
+      "tool": "ads_assign_user_to_asset",
+      "group": "business-access",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{act}/assigned_users",
+          "object_type": "any"
+        },
+        {
+          "method": "POST",
+          "path": "/{id}/assigned_users",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "ads_remove_user_from_asset",
+      "group": "business-access",
+      "requests": [
+        {
+          "method": "DELETE",
+          "path": "/{act}/assigned_users",
+          "object_type": "any"
+        },
+        {
+          "method": "DELETE",
+          "path": "/{id}/assigned_users",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "whatsapp_register_phone",
+      "group": "whatsapp",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}/register",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "whatsapp_deregister_phone",
+      "group": "whatsapp",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}/deregister",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "whatsapp_request_verification_code",
+      "group": "whatsapp",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}/request_code",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "whatsapp_verify_code",
+      "group": "whatsapp",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}/verify_code",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "whatsapp_update_business_profile",
+      "group": "whatsapp",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}/whatsapp_business_profile",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "whatsapp_create_template",
+      "group": "whatsapp-templates",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}/message_templates",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "whatsapp_update_template",
+      "group": "whatsapp-templates",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "other"
+        }
+      ]
+    },
+    {
+      "tool": "whatsapp_delete_template",
+      "group": "whatsapp-templates",
+      "requests": [
+        {
+          "method": "DELETE",
+          "path": "/{id}/message_templates",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "whatsapp_create_flow",
+      "group": "whatsapp-flows",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}/flows",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "whatsapp_update_flow",
+      "group": "whatsapp-flows",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}",
+          "object_type": "other"
+        },
+        {
+          "method": "POST",
+          "path": "/{id}/assets",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "whatsapp_publish_flow",
+      "group": "whatsapp-flows",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}/publish",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "whatsapp_deprecate_flow",
+      "group": "whatsapp-flows",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}/deprecate",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "whatsapp_delete_flow",
+      "group": "whatsapp-flows",
+      "requests": [
+        {
+          "method": "DELETE",
+          "path": "/{id}",
+          "object_type": "other"
+        }
+      ]
+    },
+    {
+      "tool": "whatsapp_create_qr_code",
+      "group": "whatsapp-config",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}/message_qrdls",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "whatsapp_update_qr_code",
+      "group": "whatsapp-config",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}/message_qrdls",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "whatsapp_delete_qr_code",
+      "group": "whatsapp-config",
+      "requests": [
+        {
+          "method": "DELETE",
+          "path": "/{id}/message_qrdls/{id}",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "whatsapp_subscribe_webhook",
+      "group": "whatsapp-config",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/{id}/subscribed_apps",
+          "object_type": "any"
+        }
+      ]
+    },
+    {
+      "tool": "whatsapp_unsubscribe_webhook",
+      "group": "whatsapp-config",
+      "requests": [
+        {
+          "method": "DELETE",
+          "path": "/{id}/subscribed_apps",
+          "object_type": "any"
+        }
+      ]
+    }
+  ]
+}

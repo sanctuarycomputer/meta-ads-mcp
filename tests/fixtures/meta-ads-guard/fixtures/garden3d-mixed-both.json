@@ -1,0 +1,94 @@
+{
+  "name": "garden3d-mixed-both",
+  "covers": [
+    "garden3d-mixed-both"
+  ],
+  "decided_by": "rule 1",
+  "why": "a creative naming both Garden3d brands' Pages and Instagram accounts: only the one-brand rule refuses it",
+  "for": "both",
+  "brand_status": {
+    "seaborne": "ready",
+    "garden3d_net": "ready"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000040",
+    "tool": "ads_create_ad_creative",
+    "method": "POST",
+    "path": "/act_9990000000000003/adcreatives",
+    "params_keys": [
+      "name",
+      "object_story_spec",
+      "asset_feed_spec",
+      "object_story_spec.page_id",
+      "object_story_spec.instagram_user_id",
+      "asset_feed_spec.bodies.text"
+    ],
+    "ad_account": "act_9990000000000003",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "creative",
+      "id": null,
+      "created": true
+    },
+    "status": {
+      "before": null,
+      "after": null
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [],
+    "identity": [
+      {
+        "field": "object_story_spec.page_id",
+        "via": "direct",
+        "id": "9991000000000003",
+        "owner_page": "9991000000000003",
+        "owner_ig": null
+      },
+      {
+        "field": "object_story_spec.instagram_user_id",
+        "via": "direct",
+        "id": "9992000000000003",
+        "owner_page": null,
+        "owner_ig": "9992000000000003"
+      },
+      {
+        "field": "object_story_spec.page_id",
+        "via": "asset_feed_spec",
+        "id": "9991000000000004",
+        "owner_page": "9991000000000004",
+        "owner_ig": null
+      },
+      {
+        "field": "object_story_spec.instagram_user_id",
+        "via": "asset_feed_spec",
+        "id": "9992000000000004",
+        "owner_page": null,
+        "owner_ig": "9992000000000004"
+      }
+    ],
+    "kind": "create",
+    "account_limit": false,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": false,
+    "reason": "rule 1: a creative naming both Garden3d brands' Pages and Instagram accounts: only the one-brand rule refuses it",
+    "basis": null,
+    "receipt": "fake-receipt-garden3d-mixed-both"
+  },
+  "reason_has": []
+}

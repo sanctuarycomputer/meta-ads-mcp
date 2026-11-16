@@ -1,0 +1,77 @@
+{
+  "name": "ig-ok__creative-create",
+  "covers": [
+    "ig-ok:creative-create"
+  ],
+  "decided_by": "rule 6",
+  "why": "an Arrangements creative with its Page and its Instagram account",
+  "for": "both",
+  "brand_status": {
+    "arrangements": "ready"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000042",
+    "tool": "ads_create_ad_creative",
+    "method": "POST",
+    "path": "/act_9990000000000002/adcreatives",
+    "params_keys": [
+      "name",
+      "object_story_spec",
+      "object_story_spec.page_id",
+      "object_story_spec.instagram_user_id"
+    ],
+    "ad_account": "act_9990000000000002",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "creative",
+      "id": null,
+      "created": true
+    },
+    "status": {
+      "before": null,
+      "after": null
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [],
+    "identity": [
+      {
+        "field": "object_story_spec.page_id",
+        "via": "direct",
+        "id": "9991000000000002",
+        "owner_page": "9991000000000002",
+        "owner_ig": null
+      },
+      {
+        "field": "object_story_spec.instagram_user_id",
+        "via": "direct",
+        "id": "9992000000000002",
+        "owner_page": null,
+        "owner_ig": "9992000000000002"
+      }
+    ],
+    "kind": "create",
+    "account_limit": false,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": true,
+    "reason": "allowed: an Arrangements creative with its Page and its Instagram account",
+    "basis": "non-spending",
+    "receipt": "fake-receipt-ig-ok__creative-create"
+  },
+  "reason_has": []
+}

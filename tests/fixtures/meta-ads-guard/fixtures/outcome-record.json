@@ -1,0 +1,21 @@
+{
+  "name": "outcome-record",
+  "covers": [
+    "outcome-record"
+  ],
+  "decided_by": "outcome",
+  "why": "the record the fork sends after Meta answers an allowed write",
+  "for": "both",
+  "outcome": {
+    "v": "1.0",
+    "outcome_for": "f0000000-0000-4000-8000-000000000030",
+    "ok": true,
+    "meta_id": "9996000000000999",
+    "error": null
+  },
+  "ack": {
+    "v": "1.0",
+    "ack": true,
+    "receipt": "fake-outcome-f0000000-0000-4000-8000-000000000030"
+  }
+}

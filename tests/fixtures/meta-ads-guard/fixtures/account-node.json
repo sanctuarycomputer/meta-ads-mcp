@@ -1,0 +1,59 @@
+{
+  "name": "account-node",
+  "covers": [
+    "account-node"
+  ],
+  "decided_by": "rule 3",
+  "why": "a write to the ad account node, whatever the key",
+  "for": "both",
+  "brand_status": {
+    "usb": "ready"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000055",
+    "tool": "ads_update_entity",
+    "method": "POST",
+    "path": "/act_9990000000000001",
+    "params_keys": [
+      "name"
+    ],
+    "ad_account": "act_9990000000000001",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "account",
+      "id": "act_9990000000000001",
+      "created": false
+    },
+    "status": {
+      "before": null,
+      "after": null
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [],
+    "identity": [],
+    "kind": "other",
+    "account_limit": true,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": false,
+    "reason": "rule 3: a write to the ad account node, whatever the key",
+    "basis": null,
+    "receipt": "fake-receipt-account-node"
+  },
+  "reason_has": []
+}

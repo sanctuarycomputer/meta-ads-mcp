@@ -1,0 +1,74 @@
+{
+  "name": "end-time-only",
+  "covers": [
+    "end-time-only"
+  ],
+  "decided_by": "rule 8",
+  "why": "an ad set end_time alone carries no category's value",
+  "for": "both",
+  "brand_status": {
+    "usb": "ready"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000113",
+    "tool": "ads_update_ad_set",
+    "method": "POST",
+    "path": "/9995000000000113",
+    "params_keys": [
+      "end_time"
+    ],
+    "ad_account": "act_9990000000000001",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "adset",
+      "id": "9995000000000113",
+      "created": false
+    },
+    "status": {
+      "before": "PAUSED",
+      "after": "PAUSED"
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": "2026-12-31T00:00:00-0500"
+    },
+    "campaigns": [
+      {
+        "id": "9994000000001130",
+        "account_id": "act_9990000000000001",
+        "created": false,
+        "role": "parent",
+        "spend_cap_minor_before": 100000,
+        "spend_cap_minor_after": 100000,
+        "name": "sb-usb-h1",
+        "status_after": "PAUSED",
+        "buying_type": "AUCTION"
+      }
+    ],
+    "identity": [],
+    "kind": "update",
+    "account_limit": false,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": false,
+    "reason": "rule 8: unrecognised write: kind update at /9995000000000113",
+    "basis": null,
+    "receipt": "fake-receipt-end-time-only"
+  },
+  "reason_has": [
+    "update",
+    "/9995000000000113"
+  ]
+}

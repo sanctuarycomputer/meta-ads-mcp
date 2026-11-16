@@ -1,0 +1,88 @@
+{
+  "name": "inline-branded-content",
+  "covers": [
+    "inline-branded-content"
+  ],
+  "decided_by": "rule 8",
+  "why": "an ad whose inline creative names a partner through branded_content",
+  "for": "both",
+  "brand_status": {
+    "usb": "ready"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000107",
+    "tool": "ads_create_ad",
+    "method": "POST",
+    "path": "/act_9990000000000001/ads",
+    "params_keys": [
+      "name",
+      "adset_id",
+      "status",
+      "creative",
+      "creative.branded_content",
+      "creative.object_story_spec",
+      "creative.object_story_spec.page_id"
+    ],
+    "ad_account": "act_9990000000000001",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "ad",
+      "id": null,
+      "created": true
+    },
+    "status": {
+      "before": null,
+      "after": "PAUSED"
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [
+      {
+        "id": "9994000000001070",
+        "account_id": "act_9990000000000001",
+        "created": false,
+        "role": "parent",
+        "spend_cap_minor_before": 100000,
+        "spend_cap_minor_after": 100000,
+        "name": "sb-usb-h1",
+        "status_after": "ACTIVE",
+        "buying_type": "AUCTION"
+      }
+    ],
+    "identity": [
+      {
+        "field": "object_story_spec.page_id",
+        "via": "creative",
+        "id": "9991000000000001",
+        "owner_page": "9991000000000001",
+        "owner_ig": null
+      }
+    ],
+    "kind": "create",
+    "account_limit": false,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": false,
+    "reason": "rule 8: unrecognised write: kind create at /act_9990000000000001/ads",
+    "basis": null,
+    "receipt": "fake-receipt-inline-branded-content"
+  },
+  "reason_has": [
+    "create",
+    "/act_9990000000000001/ads"
+  ]
+}

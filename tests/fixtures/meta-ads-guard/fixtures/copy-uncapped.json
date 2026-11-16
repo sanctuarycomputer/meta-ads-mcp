@@ -1,0 +1,80 @@
+{
+  "name": "copy-uncapped",
+  "covers": [
+    "copy-uncapped"
+  ],
+  "decided_by": "rule 5",
+  "why": "a copy into an uncapped campaign",
+  "for": "both",
+  "brand_status": {
+    "usb": "ready"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000019",
+    "tool": "ads_duplicate_ad",
+    "method": "POST",
+    "path": "/9996000000000019/copies",
+    "params_keys": [
+      "adset_id",
+      "status_option"
+    ],
+    "ad_account": "act_9990000000000001",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "ad",
+      "id": "9996000000000019",
+      "created": false
+    },
+    "status": {
+      "before": "PAUSED",
+      "after": "PAUSED"
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [
+      {
+        "id": "9994000000000190",
+        "account_id": "act_9990000000000001",
+        "created": false,
+        "role": "destination",
+        "spend_cap_minor_before": null,
+        "spend_cap_minor_after": null,
+        "name": "sb-usb-h1",
+        "status_after": "PAUSED",
+        "buying_type": "AUCTION"
+      }
+    ],
+    "identity": [
+      {
+        "field": "object_story_spec.page_id",
+        "via": "source_ad",
+        "id": "9991000000000001",
+        "owner_page": "9991000000000001",
+        "owner_ig": null
+      }
+    ],
+    "kind": "copy",
+    "account_limit": false,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": false,
+    "reason": "rule 5: a copy into an uncapped campaign",
+    "basis": null,
+    "receipt": "fake-receipt-copy-uncapped"
+  },
+  "reason_has": []
+}
