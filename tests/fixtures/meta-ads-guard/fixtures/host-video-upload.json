@@ -1,0 +1,15 @@
+{
+  "name": "host-video-upload",
+  "covers": [
+    "host-video-upload"
+  ],
+  "for": "client",
+  "decided_by": "client",
+  "why": "a video upload to graph-video.facebook.com: the client asks the guard",
+  "request": {
+    "method": "POST",
+    "host": "graph-video.facebook.com",
+    "path": "/v27.0/act_9990000000000001/advideos"
+  },
+  "client": "ask-guard"
+}

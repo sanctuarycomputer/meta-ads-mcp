@@ -214,6 +214,7 @@ describe("admittedCreativeSpec", () => {
 
 describe("CREATIVE_READ_FIELDS", () => {
   const fields = CREATIVE_READ_FIELDS.split(",");
+  // Contract 1.1 C10 and C12: interactive_components_spec left the creative key sets and is read as a left-out key.
   it("is exactly ruling R1's 30 fields", () => {
     expect(fields).toEqual([
       "name",
@@ -228,7 +229,6 @@ describe("CREATIVE_READ_FIELDS", () => {
       "object_id",
       "call_to_action",
       "image_crops",
-      "interactive_components_spec",
       "portrait_customizations",
       "categorization_criteria",
       "link_url",
@@ -243,6 +243,7 @@ describe("CREATIVE_READ_FIELDS", () => {
       "product_set_id",
       "template_url_spec",
       "applink_treatment",
+      "interactive_components_spec",
       "creative_sourcing_spec",
       "destination_spec",
       "wamo_whatsapp_identity_spec",
@@ -258,6 +259,7 @@ describe("CREATIVE_READ_FIELDS", () => {
       "product_set_id",
       "template_url_spec",
       "applink_treatment",
+      "interactive_components_spec",
       "creative_sourcing_spec",
       "destination_spec",
       "wamo_whatsapp_identity_spec",

@@ -1,0 +1,72 @@
+{
+  "name": "site-links-own",
+  "covers": [
+    "site-links-own"
+  ],
+  "decided_by": "rule 6",
+  "why": "a creative with site links on the fork's paths",
+  "for": "both",
+  "brand_status": {
+    "usb": "ready"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000157",
+    "tool": "ads_create_ad_creative",
+    "method": "POST",
+    "path": "/act_9990000000000001/adcreatives",
+    "params_keys": [
+      "name",
+      "object_story_spec",
+      "creative_sourcing_spec",
+      "creative_sourcing_spec.site_links_spec.site_link_title",
+      "creative_sourcing_spec.site_links_spec.site_link_url",
+      "object_story_spec.page_id"
+    ],
+    "ad_account": "act_9990000000000001",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "creative",
+      "id": null,
+      "created": true
+    },
+    "status": {
+      "before": null,
+      "after": null
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [],
+    "identity": [
+      {
+        "field": "object_story_spec.page_id",
+        "via": "direct",
+        "id": "9991000000000001",
+        "owner_page": "9991000000000001",
+        "owner_ig": null
+      }
+    ],
+    "kind": "create",
+    "account_limit": false,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": true,
+    "reason": "allowed: a creative with site links on the fork's paths",
+    "basis": "non-spending",
+    "receipt": "fake-receipt-site-links-own"
+  },
+  "reason_has": []
+}

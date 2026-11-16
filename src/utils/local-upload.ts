@@ -8,7 +8,9 @@ import path from "node:path";
  * upload tools). The file must sit under the root with no symlink anywhere on
  * its path, must be a regular file, and is read through one descriptor whose
  * real path is checked again after opening, so a swap between the check and
- * the open is refused. Linux only: the descriptor check reads /proc/self/fd.
+ * the open is refused. A file with more than one link is refused (a hard link
+ * inside the root to a file outside it), and so is an empty one. Linux only:
+ * the descriptor check reads /proc/self/fd.
  */
 
 export const LOCAL_UPLOAD_DEFAULT_MAX_BYTES = 100 * 1024 * 1024;
@@ -19,6 +21,8 @@ export type LocalUploadErrorCode =
   | "bad-option"
   | "symlink"
   | "not-regular"
+  | "hard-link"
+  | "empty"
   | "too-large"
   | "fd-mismatch"
   | "no-proc"
@@ -119,8 +123,13 @@ async function readChecked(root: string, segments: string[], maxBytes: number): 
   // must not wait for a writer; the regular-file check below then refuses it.
   const handle = await fs.open(expected, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
-    if (!(await handle.stat()).isFile()) {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
       throw new LocalUploadError("not-regular", "The upload path must name a regular file.");
+    }
+    // A hard link made before the open (one made after is not seen, and is no way out: the bytes are the file's).
+    if (stat.nlink !== 1) {
+      throw new LocalUploadError("hard-link", "The upload file must not be a hard link (it has more than one link).");
     }
     let fdPath: string;
     try {
@@ -149,6 +158,7 @@ async function readChecked(root: string, segments: string[], maxBytes: number): 
       hash.update(filled);
       chunks.push(filled);
     }
+    if (size === 0) throw new LocalUploadError("empty", "The file is empty.");
     return { bytes: Buffer.concat(chunks, size), sha256: hash.digest("hex"), size, name: segments[segments.length - 1] };
   } finally {
     await handle.close();

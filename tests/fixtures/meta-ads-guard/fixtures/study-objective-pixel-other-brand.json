@@ -20,6 +20,9 @@
     "params_keys": [
       "name",
       "cells",
+      "cells.name",
+      "cells.treatment_percentage",
+      "cells.campaigns",
       "start_time",
       "end_time",
       "objectives",

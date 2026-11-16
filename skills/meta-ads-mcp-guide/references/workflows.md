@@ -38,7 +38,7 @@ Frequency above roughly 3 in a short window, a falling CTR with a stable CPM, an
 
 "Run this image with these three primary texts and two headlines."
 
-1. `ads_upload_ad_image` (or `ads_upload_ad_video`) for the media, unless it is already in the account.
+1. `ads_upload_ad_image` (or `ads_upload_ad_video`) for the media, unless it is already in the account. Each takes a `path` to a local file under the server's upload directory, not a URL.
 2. `ads_generate_preview` with the same fields you will create with, to check the copy renders. It shows one combination.
 3. `ads_create_ad_creative` with `primary_texts`, `headlines` and `descriptions` (up to 5 each, headlines up to 255 characters, no repeats). Meta shows each person the combination likely to work best, as Ads Manager's text options do.
 4. `ads_create_ad` in a regular ad set. It is created paused; activating it is a separate, confirmed step.

@@ -65,12 +65,14 @@ export interface Scenario {
 }
 
 /**
- * Fixtures 253 does not drive (ruling m-20261116-114218529), each with the builder rule that rules it out. The
- * three of contract §13 and the two `invalid__` (IP3) exist for the guard alone; the other seven hold a value no
- * request gives under buildDescriptor's rules (tests/meta/write-guard-descriptor.test.ts builds each one's
- * nearest request and asserts the consistent form).
+ * Fixtures the fork does not drive (contract 1.1 §13; ruling m-20261116-114218529), each with the builder rule that
+ * rules it out. The three field fixtures of §13 and the two `invalid__` (IP3) exist for the guard alone; the six
+ * guard-side fixtures and the three 1.1 ones (§13: `lead-form-no-entry`, `bare-creative`, `bare-creative-on-update`)
+ * hold a value no request gives under buildDescriptor's rules (tests/meta/write-guard-descriptor.test.ts builds the
+ * nearest request of several and asserts the consistent form). `cross-brand__asset_feed_spec` is driven at 1.1 (C5).
  */
-const ASSET_FEED_ID = "Task 2's IDENTITY_FIELDS: an identity id in asset_feed_spec puts its path in params_keys";
+const ASSET_FEED_ID =
+  "contract 1.1 §3.2: an asset_feed_spec entry's id sits at a params_keys leaf of its kind, and this one has none";
 export const SKIPPED: Readonly<Record<string, string>> = {
   "kind-mismatch": "contract §13: a kind a correct fork never sends",
   "account-limit-flag-wrong": "contract §13: an account_limit a correct fork never sends",
@@ -82,7 +84,9 @@ export const SKIPPED: Readonly<Record<string, string>> = {
   "unknown-kind-no-campaign": "rule 8: a campaign object lists self on every row",
   "unresolved-campaign": "rule 8: an unreadable parent campaign id gives no entry",
   "null-ad-account": "rule 7: account facts are read only from a resolved ad_account",
-  "cross-brand__asset_feed_spec": ASSET_FEED_ID,
+  "lead-form-no-entry": "contract §13: a fork always makes the lead-form entry, unresolved or not",
+  "bare-creative": "contract §13: a fork lists creative.creative_id whenever it made a creative_id entry",
+  "bare-creative-on-update": "contract §13: a fork lists creative.creative_id whenever it made a creative_id entry",
   "garden3d-mixed-both": ASSET_FEED_ID,
 };
 
@@ -100,7 +104,26 @@ const OVERRIDES: Readonly<Record<string, { reason: string; apply: (s: Scenario, 
   },
 };
 
-const BOUNDED = new Set(["object_story_spec", "call_to_action", "asset_feed_spec", "promoted_object", "lookalike_spec", "objectives"]);
+const BOUNDED = new Set([
+  "object_story_spec",
+  "call_to_action",
+  "asset_feed_spec",
+  "promoted_object",
+  "lookalike_spec",
+  "objectives",
+  "creative_asset_groups_spec",
+  "creative_sourcing_spec",
+]);
+// Contract 1.1 §3.2: the identity kind a leaf inside asset_feed_spec names, by its last key, and the field of
+// that kind its entry carries. The harness's own copy, so the builder's ASSET_FEED_KINDS is checked against it.
+const ASSET_FEED_KIND_FIELD: Readonly<Record<string, string>> = {
+  page: "object_story_spec.page_id",
+  page_id: "object_story_spec.page_id",
+  instagram_user_id: "object_story_spec.instagram_user_id",
+  instagram_actor_id: "object_story_spec.instagram_user_id",
+  lead_gen_form_id: "object_story_spec.link_data.call_to_action.value.lead_gen_form_id",
+  pixel_id: "promoted_object.pixel_id",
+};
 const PAGE_FIELDS = new Set(["object_story_spec.page_id", "promoted_object.page_id", "object_id"]);
 const IG_FIELDS = new Set(["instagram_user_id", "instagram_actor_id", "object_story_spec.instagram_user_id"]);
 const LEAD_FIELDS = new Set([
@@ -215,9 +238,16 @@ export function scenarioFor(fixture: HarnessFixture): Scenario {
       const sub = k.slice(`${prefix}${key}.`.length);
       setPath(value, sub, leaf(`${key}.${sub}`, via));
     }
-    // An id `via: asset_feed_spec` sits in asset_feed_spec under the field it appears as (contract §3.2).
+    // An id `via: asset_feed_spec` sits at the params_keys leaf of its kind (contract 1.1 §3.2, C5): each entry
+    // takes the first unused leaf whose last key names a kind of its field. Every other leaf holds "x", a non-id.
     if (key === "asset_feed_spec") {
-      for (const e of d.identity.filter((x) => x.via === "asset_feed_spec")) setPath(value, e.field, e.id);
+      const free = keys
+        .filter((k) => k.startsWith(`${prefix}${key}.`))
+        .map((k) => k.slice(`${prefix}${key}.`.length));
+      for (const e of d.identity.filter((x) => x.via === "asset_feed_spec")) {
+        const at = free.findIndex((sub) => ASSET_FEED_KIND_FIELD[sub.split(".").pop() ?? ""] === e.field);
+        if (at >= 0) setPath(value, free.splice(at, 1)[0], e.id);
+      }
     }
     return key === "objectives" ? [value] : value;
   };
@@ -268,10 +298,27 @@ export function scenarioFor(fixture: HarnessFixture): Scenario {
         return self?.buying_type ?? "x";
       case "execution_options":
         return ["validate_only"];
-      case "cells":
+      case "cells": {
+        // Contract 1.1 C10: each cell carries every cells.* path the fixture lists; a cell's campaigns are its
+        // study-cell campaign, any other path a scalar.
+        const cell = (i: number, campaignId: string | null): Obj => {
+          const out: Obj = {};
+          for (const k of keys) {
+            if (!k.startsWith("cells.")) continue;
+            const sub = k.slice("cells.".length);
+            if (sub === "campaigns") {
+              if (campaignId) out.campaigns = [campaignId];
+            }
+            else if (sub === "name") out.name = `cell ${i + 1}`;
+            else if (sub === "treatment_percentage") out.treatment_percentage = 50;
+            else setPath(out, sub, "x");
+          }
+          return out;
+        };
         return d.object.created
-          ? d.campaigns.filter((c) => c.role === "study-cell").map((c, i) => ({ name: `cell ${i + 1}`, campaigns: [c.id] }))
-          : [{ name: "cell" }];
+          ? d.campaigns.filter((c) => c.role === "study-cell").map((c, i) => cell(i, c.id))
+          : [cell(0, null)];
+      }
       default:
         return leaf(key, "direct");
     }

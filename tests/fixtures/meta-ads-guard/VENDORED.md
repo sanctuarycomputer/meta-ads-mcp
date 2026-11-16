@@ -1,6 +1,6 @@
-# Vendored meta-ads-guard contract 1.0
+# Vendored meta-ads-guard contract 1.1
 
-Byte-identical copies from the stacksbot home repo, commit 3d7c7b3fb3c86dffda1a7eff89b4cbaac99c8945 (origin/main).
+Byte-identical copies from the stacksbot home repo, commit 6bbb5ba06b2ba1c7f4dcf2a6a1a06eeae0139126 (main).
 
 - scripts/meta-ads/fake-guard.mjs -> fake-guard.mjs
 - docs/contracts/meta-ads-guard/endpoints.json -> endpoints.json

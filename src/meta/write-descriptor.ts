@@ -1,6 +1,6 @@
-// The meta-ads-guard contract layer (docs/contracts/meta-ads-guard.md@1.0 §3-§6): the descriptor's types, the
+// The meta-ads-guard contract layer (docs/contracts/meta-ads-guard.md@1.1 §2-§6): the descriptor's types, the
 // endpoint table, and the pure derivations the descriptor builder uses. Nothing here reads Graph or the guard.
-// matchEndpoint, deriveKind, deriveAccountLimit, deriveCreativeBearing and validateDescriptor port the
+// matchEndpoint, deriveKind, deriveAccountLimit, deriveCreativeBearing, hostAllowed and validateDescriptor port the
 // contract's fake guard (tests/fixtures/meta-ads-guard/fake-guard.mjs) line for line; a test holds them equal.
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 
@@ -137,6 +137,8 @@ export interface EndpointRow {
 export interface EndpointTable {
   v: string;
   host_list: readonly string[];
+  /** Contract §2: a host listed here takes only a request matching one of its rows. */
+  host_rows: Readonly<Record<string, readonly string[]>>;
   read_post: string;
   account_limit_keys: {
     exact: readonly string[];
@@ -149,11 +151,12 @@ export interface EndpointTable {
   sub_keys: Readonly<Record<string, readonly string[]>>;
 }
 
-// Contract 1.0's endpoints.json, embedded (coverage left out: it is the guard's, not the fork's). A test holds
+// Contract 1.1's endpoints.json, embedded (coverage left out: it is the guard's, not the fork's). A test holds
 // it equal to the vendored copy; re-vendor and regenerate together.
 export const ENDPOINTS: EndpointTable = {
-  v: "1.0",
-  host_list: ["graph.facebook.com"],
+  v: "1.1",
+  host_list: ["graph.facebook.com", "graph-video.facebook.com"],
+  host_rows: { "graph-video.facebook.com": ["POST /act_{id}/advideos"] },
   read_post: "^/(v\\d+\\.\\d+/)?(act_\\d+|\\d+)/insights$",
   account_limit_keys: {
     exact: ["spend_cap_action"],
@@ -192,9 +195,9 @@ export const ENDPOINTS: EndpointTable = {
       kind: "create", refine: "boost-if-inline-post", no_campaign: false, account_limit: "by-keys",
       roles: ["parent"], validate_only: "documented", creative_bearing: "if-creative-key",
       keys: {
-        "paused-create": ["name", "adset_id", "status", "creative", "creative.creative_id", "creative.name", "creative.object_story_spec", "creative.object_story_id", "creative.source_instagram_media_id", "creative.instagram_user_id", "creative.asset_feed_spec", "creative.url_tags", "creative.degrees_of_freedom_spec", "creative.contextual_multi_ads", "creative.object_id", "creative.call_to_action", "creative.image_crops", "creative.interactive_components_spec", "creative.portrait_customizations", "creative.categorization_criteria", "creative.link_url", "creative.platform_customizations", "creative.adlabels", "conversion_domain", "adlabels", "creative_asset_groups_spec", "execution_options"],
-        "live-create": ["name", "adset_id", "status", "creative", "creative.creative_id", "creative.name", "creative.object_story_spec", "creative.object_story_id", "creative.source_instagram_media_id", "creative.instagram_user_id", "creative.asset_feed_spec", "creative.url_tags", "creative.degrees_of_freedom_spec", "creative.contextual_multi_ads", "creative.object_id", "creative.call_to_action", "creative.image_crops", "creative.interactive_components_spec", "creative.portrait_customizations", "creative.categorization_criteria", "creative.link_url", "creative.platform_customizations", "creative.adlabels", "conversion_domain", "adlabels", "creative_asset_groups_spec", "execution_options"],
-        "boost": ["name", "adset_id", "status", "creative", "creative.creative_id", "creative.name", "creative.object_story_spec", "creative.object_story_id", "creative.source_instagram_media_id", "creative.instagram_user_id", "creative.asset_feed_spec", "creative.url_tags", "creative.degrees_of_freedom_spec", "creative.contextual_multi_ads", "creative.object_id", "creative.call_to_action", "creative.image_crops", "creative.interactive_components_spec", "creative.portrait_customizations", "creative.categorization_criteria", "creative.link_url", "creative.platform_customizations", "creative.adlabels", "conversion_domain", "adlabels", "creative_asset_groups_spec", "execution_options"],
+        "paused-create": ["name", "adset_id", "status", "creative", "creative.creative_id", "creative.name", "creative.object_story_spec", "creative.object_story_id", "creative.source_instagram_media_id", "creative.instagram_user_id", "creative.asset_feed_spec", "creative.url_tags", "creative.degrees_of_freedom_spec", "creative.contextual_multi_ads", "creative.object_id", "creative.call_to_action", "creative.image_crops", "creative.portrait_customizations", "creative.categorization_criteria", "creative.link_url", "creative.platform_customizations", "creative.adlabels", "conversion_domain", "adlabels", "creative_asset_groups_spec", "execution_options"],
+        "live-create": ["name", "adset_id", "status", "creative", "creative.creative_id", "creative.name", "creative.object_story_spec", "creative.object_story_id", "creative.source_instagram_media_id", "creative.instagram_user_id", "creative.asset_feed_spec", "creative.url_tags", "creative.degrees_of_freedom_spec", "creative.contextual_multi_ads", "creative.object_id", "creative.call_to_action", "creative.image_crops", "creative.portrait_customizations", "creative.categorization_criteria", "creative.link_url", "creative.platform_customizations", "creative.adlabels", "conversion_domain", "adlabels", "creative_asset_groups_spec", "execution_options"],
+        "boost": ["name", "adset_id", "status", "creative", "creative.creative_id", "creative.name", "creative.object_story_spec", "creative.object_story_id", "creative.source_instagram_media_id", "creative.instagram_user_id", "creative.asset_feed_spec", "creative.url_tags", "creative.degrees_of_freedom_spec", "creative.contextual_multi_ads", "creative.object_id", "creative.call_to_action", "creative.image_crops", "creative.portrait_customizations", "creative.categorization_criteria", "creative.link_url", "creative.platform_customizations", "creative.adlabels", "conversion_domain", "adlabels", "creative_asset_groups_spec", "execution_options"],
       },
     },
     {
@@ -202,7 +205,7 @@ export const ENDPOINTS: EndpointTable = {
       kind: "create", refine: null, no_campaign: true, account_limit: "by-keys",
       roles: [], validate_only: "documented", creative_bearing: "always",
       keys: {
-        "no-campaign-create": ["name", "object_story_spec", "object_story_id", "source_instagram_media_id", "instagram_user_id", "asset_feed_spec", "url_tags", "degrees_of_freedom_spec", "contextual_multi_ads", "object_id", "call_to_action", "image_crops", "interactive_components_spec", "portrait_customizations", "categorization_criteria", "link_url", "platform_customizations", "adlabels", "execution_options"],
+        "no-campaign-create": ["name", "object_story_spec", "object_story_id", "source_instagram_media_id", "instagram_user_id", "asset_feed_spec", "url_tags", "degrees_of_freedom_spec", "contextual_multi_ads", "object_id", "call_to_action", "image_crops", "portrait_customizations", "categorization_criteria", "link_url", "platform_customizations", "adlabels", "creative_sourcing_spec", "execution_options"],
       },
     },
     {
@@ -290,7 +293,7 @@ export const ENDPOINTS: EndpointTable = {
       keys: {
         "pause": ["status", "execution_options"],
         "delete": ["status", "execution_options"],
-        "edit": ["name", "creative", "creative.creative_id", "creative.name", "creative.object_story_spec", "creative.object_story_id", "creative.source_instagram_media_id", "creative.instagram_user_id", "creative.asset_feed_spec", "creative.url_tags", "creative.degrees_of_freedom_spec", "creative.contextual_multi_ads", "creative.object_id", "creative.call_to_action", "creative.image_crops", "creative.interactive_components_spec", "creative.portrait_customizations", "creative.categorization_criteria", "creative.link_url", "creative.platform_customizations", "creative.adlabels", "execution_options"],
+        "edit": ["name", "creative", "creative.creative_id", "creative.name", "creative.object_story_spec", "creative.object_story_id", "creative.source_instagram_media_id", "creative.instagram_user_id", "creative.asset_feed_spec", "creative.url_tags", "creative.degrees_of_freedom_spec", "creative.contextual_multi_ads", "creative.object_id", "creative.call_to_action", "creative.image_crops", "creative.portrait_customizations", "creative.categorization_criteria", "creative.link_url", "creative.platform_customizations", "creative.adlabels", "execution_options"],
         "activation": ["status", "execution_options"],
       },
     },
@@ -544,6 +547,9 @@ export const ENDPOINTS: EndpointTable = {
     promoted_object: ["page_id", "pixel_id", "custom_event_type"],
     lookalike_spec: ["ratio", "country", "type"],
     objectives: ["name", "type", "is_primary", "adspixels.id", "adspixels.event_names"],
+    creative_asset_groups_spec: ["groups.images.hash", "groups.videos.video_id", "groups.texts.text", "groups.texts.text_type", "groups.call_to_action.type", "groups.call_to_action.value.link"],
+    cells: ["name", "treatment_percentage", "control_percentage", "adsets", "campaigns", "id"],
+    creative_sourcing_spec: ["site_links_spec.site_link_title", "site_links_spec.site_link_url", "site_links_spec.site_link_image_hash"],
   },
 };
 
@@ -562,6 +568,44 @@ export function matchEndpoint(method: string, path: string, objectType: ObjectTy
     if (new RegExp(`^(/v\\d+\\.\\d+)?${pattern}$`).test(path)) return row;
   }
   return null;
+}
+
+/**
+ * M11, the client's key-set check (spec check 3): the first key of `params_keys` outside its row's key set, the
+ * union of the row's `keys` lists, `execution_options` aside; `null` when every key is in it. A dotted key is in the
+ * set when the set lists it, or lists its prefix up to a bounded name (`sub_keys`); deeper paths are the guard's
+ * (rule 8, §5.1). A write that matches no row has an empty set (`row: "no row"`).
+ */
+export function keySetMiss(d: Descriptor): { key: string; row: string } | null {
+  const row = matchEndpoint(d.method, d.path, d.object.type);
+  const set = new Set(row ? Object.values(row.keys).flat() : []);
+  const inSet = (key: string): boolean => {
+    if (set.has(key)) return true;
+    const parts = key.split(".");
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (Object.hasOwn(ENDPOINTS.sub_keys, parts[i]) && set.has(parts.slice(0, i + 1).join("."))) return true;
+    }
+    return false;
+  };
+  const key = d.params_keys.find((k) => k !== "execution_options" && !inSet(k));
+  return key === undefined ? null : { key, row: row ? row.id : "no row" };
+}
+
+/** The video upload host (contract 1.1 §2, C14): it takes only the `host_rows` rows, `POST /act_{id}/advideos`. */
+export const VIDEO_HOST = "graph-video.facebook.com";
+
+/**
+ * Contract §2 (1.1, C14), the fake's `hostAllowed` on `ENDPOINTS`: whether the client may send this request to this
+ * host. A host outside `host_list`: never. A host without `host_rows`: any request. Otherwise only a request matching
+ * one of its rows (matched with object type `video`, so a GET matches none). `host` is the URL's `host`, port
+ * included, matched exactly.
+ */
+export function hostAllowed(method: string, host: string, path: string): boolean {
+  if (!ENDPOINTS.host_list.includes(host)) return false;
+  const only = ENDPOINTS.host_rows[host];
+  if (!only) return true;
+  const row = matchEndpoint(method, path, "video");
+  return row !== null && only.includes(row.id);
 }
 
 const INLINE_POST_FIELDS: readonly string[] = ["source_instagram_media_id", "object_story_id"];
@@ -668,7 +712,10 @@ const CREATIVE_KEYS: readonly string[] = [
   ),
 ].filter((k) => k !== "creative_id");
 
-/** Contract §5's creative keys left out of every key set: read, so admittedCreativeSpec sees and refuses them. */
+/**
+ * Contract §5's creative keys left out of every key set: read, so admittedCreativeSpec sees and refuses them.
+ * `interactive_components_spec` left the key sets at 1.1 (C10) and is still read (C12: §3.3 and §5 name it).
+ */
 const LEFT_OUT_CREATIVE_KEYS = [
   "branded_content",
   "facebook_branded_content",
@@ -676,12 +723,16 @@ const LEFT_OUT_CREATIVE_KEYS = [
   "product_set_id",
   "template_url_spec",
   "applink_treatment",
+  "interactive_components_spec",
   "creative_sourcing_spec",
   "destination_spec",
   "wamo_whatsapp_identity_spec",
 ] as const;
 
-/** The fields of an attached creative's GET (contract §3.2 `creative_id`; ruling R1): every key §3.2 or §5 names. */
+/**
+ * The fields of an attached creative's GET (contract §3.2 `creative_id`; ruling R1; 1.1 C12): exactly the creative
+ * keys §3.2, §3.3 and §5 name, from the 1.1 table's creative keys and §5's left-out ones.
+ */
 export const CREATIVE_READ_FIELDS: string = [
   ...CREATIVE_KEYS,
   "effective_object_story_id",
@@ -789,14 +840,43 @@ const REQUEST_IDENTITY_FIELDS = [
 
 /**
  * Where each contract §3.2 field is read in a request: `direct` from the body's top level, `creative` from an
- * inline `creative`, each entry both the field and its dotted path. No `asset_feed_spec` entry: in 1.0 no
- * `sub_keys` leaf path there holds an identity id, so an id elsewhere in it puts its path in `params_keys`,
- * which rule 8 refuses.
+ * inline `creative`, each entry both the field and its dotted path. An id inside `asset_feed_spec` is read by
+ * its leaf's last key instead (`ASSET_FEED_KINDS`): no §5.1 `asset_feed_spec` path carries an id.
  */
 export const IDENTITY_FIELDS: Readonly<{ direct: readonly IdentityField[]; creative: readonly IdentityField[] }> = {
   direct: REQUEST_IDENTITY_FIELDS,
   creative: REQUEST_IDENTITY_FIELDS,
 };
+
+/**
+ * Contract 1.1 §3.2 `via: "asset_feed_spec"` (C5, C17): the identity kinds a leaf inside an `asset_feed_spec` can
+ * name, by the leaf's last key, each to the §3.2 field of its kind. A leaf whose last key is one of these and whose
+ * value is a Graph id is an entry; its path stays in `params_keys`, outside §5.1, so rule 8 decides once rule 1 has
+ * passed. Any other leaf, or a value that is not a Graph id, is no entry, and its path reaches `params_keys` too.
+ */
+export const ASSET_FEED_KINDS: Readonly<Record<string, IdentityField>> = {
+  page: "object_story_spec.page_id",
+  page_id: "object_story_spec.page_id",
+  instagram_user_id: "object_story_spec.instagram_user_id",
+  instagram_actor_id: "object_story_spec.instagram_user_id",
+  lead_gen_form_id: "object_story_spec.link_data.call_to_action.value.lead_gen_form_id",
+  pixel_id: "promoted_object.pixel_id",
+};
+
+// Every leaf of an `asset_feed_spec` value as [last key, value], walked as leafPaths walks it (array indices
+// dropped; a non-object in an array of objects is a leaf at the array's own key).
+function assetFeedLeaves(value: unknown, key: string, out: Array<[string, unknown]>): void {
+  if (isObj(value)) {
+    for (const [k, v] of Object.entries(value)) assetFeedLeaves(v, k, out);
+  } else if (Array.isArray(value) && value.some(holdsObject)) {
+    for (const e of value) {
+      if (holdsObject(e)) assetFeedLeaves(e, key, out);
+      else if (key) out.push([key, e]);
+    }
+  } else if (key) {
+    out.push([key, value]);
+  }
+}
 
 /** Spec M16: the object types an id-taking tool may write; a GET type outside its list is refused. */
 export const TOOL_EXPECTED_TYPES: Readonly<Record<string, readonly ObjectType[]>> = {
@@ -1054,9 +1134,9 @@ function assertReadable(params: Readonly<Obj>): void {
   }
 }
 
-// The keys a study body cell may carry: the ones the builder reads, and scalars that name no object.
+// The cell keys the builder reads (contract §3.1 study-cell). Every other cell key is left to the guard: `cells` is
+// bounded at 1.1 (C10), so each cell key's path is in params_keys and §5.1 decides it (rule 8: `cells.adaccounts`).
 const CELL_ID_LISTS = ["campaigns", "adsets"] as const;
-const CELL_SCALARS = ["id", "name", "description", "treatment_percentage", "control_percentage"];
 const STATUS_OPTIONS = ["ACTIVE", "PAUSED", "INHERITED_FROM_SOURCE"];
 
 // A request value that names a Graph object must be one: a value present but unreadable refuses, never drops.
@@ -1091,14 +1171,11 @@ function assertRequestValues(params: Readonly<Obj>): void {
   }
   for (const cell of Array.isArray(params.cells) ? (params.cells as Obj[]) : []) {
     for (const [k, v] of Object.entries(cell)) {
-      if ((CELL_ID_LISTS as readonly string[]).includes(k)) {
-        if (!Array.isArray(v)) throw new WriteRefusal(`cells.${k} is not a list of ids`);
-        for (const e of v) {
-          const onlyId = isObj(e) && Object.keys(e).length === 1 && has(e, "id");
-          requestId(`cells.${k}`, onlyId ? e.id : e);
-        }
-      } else if (!CELL_SCALARS.includes(k) || isObj(v) || Array.isArray(v)) {
-        throw new WriteRefusal(`cells.${k} is not a cell key the guard reads`);
+      if (!(CELL_ID_LISTS as readonly string[]).includes(k)) continue;
+      if (!Array.isArray(v)) throw new WriteRefusal(`cells.${k} is not a list of ids`);
+      for (const e of v) {
+        const onlyId = isObj(e) && Object.keys(e).length === 1 && has(e, "id");
+        requestId(`cells.${k}`, onlyId ? e.id : e);
       }
     }
   }
@@ -1388,7 +1465,9 @@ export async function buildDescriptor(req: WriteRequest, ctx: BuildContext, get:
     owner_ig: null,
   });
   // One identity value; false when it is not a readable id (a request's were refused up front, so only a value
-  // Graph reported reaches here unreadable, and its creative is then unresolved).
+  // Graph reported, or one inside an asset_feed_spec, reaches here unreadable: a reported one's creative is then
+  // unresolved, and an asset_feed_spec one is no entry). This GRAPH_ID test is the asset_feed_spec entries' Graph-id
+  // test (spec check 6).
   const resolve = async (field: IdentityField, via: IdentityVia, value: unknown): Promise<boolean> => {
     const id = graphId(value);
     if (id === null) return false;
@@ -1430,10 +1509,24 @@ export async function buildDescriptor(req: WriteRequest, ctx: BuildContext, get:
     if (!readable || !admittedCreativeSpec(spec)) add(unresolvedCreative(cid, via));
   };
 
+  // Contract 1.1 §3.2 `via: "asset_feed_spec"` (C5, C17; spec check 6): an `asset_feed_spec` sent top-level or
+  // in an inline creative. A leaf whose last key is a kind is an entry when `resolve` finds its value a Graph id
+  // (GRAPH_ID), resolved as that field is (a lead form to its Page, a pixel to no owner). Only a request's
+  // asset_feed_spec: a read creative's goes through admittedCreativeSpec, and an id path there leaves it unresolved.
+  const fromAssetFeed = async (spec: unknown): Promise<void> => {
+    const leaves: Array<[string, unknown]> = [];
+    assetFeedLeaves(spec, "", leaves);
+    for (const [key, value] of leaves) {
+      if (Object.hasOwn(ASSET_FEED_KINDS, key)) await resolve(ASSET_FEED_KINDS[key], "asset_feed_spec", value);
+    }
+  };
+
   await fromRequest(params, IDENTITY_FIELDS.direct, "direct");
+  if (has(params, "asset_feed_spec")) await fromAssetFeed(params.asset_feed_spec);
   if (has(params, "creative_id")) await fromCreative(params.creative_id, "creative_id");
   if (isObj(params.creative)) {
     await fromRequest(params.creative, IDENTITY_FIELDS.creative, "creative");
+    if (has(params.creative, "asset_feed_spec")) await fromAssetFeed(params.creative.asset_feed_spec);
     if (has(params.creative, "creative_id")) await fromCreative(params.creative.creative_id, "creative_id");
   }
   if (row?.id === "POST /{id}/copies" && object.id) {

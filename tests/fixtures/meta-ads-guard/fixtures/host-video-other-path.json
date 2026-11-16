@@ -1,0 +1,15 @@
+{
+  "name": "host-video-other-path",
+  "covers": [
+    "host-video-other-path"
+  ],
+  "for": "client",
+  "decided_by": "client",
+  "why": "graph-video.facebook.com takes only POST /act_{id}/advideos: the client refuses an image upload there",
+  "request": {
+    "method": "POST",
+    "host": "graph-video.facebook.com",
+    "path": "/act_9990000000000001/adimages"
+  },
+  "client": "refuse"
+}

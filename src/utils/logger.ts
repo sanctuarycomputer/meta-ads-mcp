@@ -56,7 +56,7 @@ const QUOTED_PAIR = /"([A-Za-z0-9_%.-]{1,64})=([^&#;,\s"'<>]*)/g;
  */
 export function scrubLogLine(line: string): string {
   try {
-    let out = JSON.stringify(scrubCredentialsDeep(JSON.parse(line) as unknown));
+    let out = JSON.stringify(scrubCredentialsDeep(JSON.parse(line) as unknown, undefined, { foreignTokens: true }));
     // The deep scrub cleans values and credential-named keys, not a key's
     // own text: remove each env secret, as JSON spells it, from the line.
     for (const secret of envSecrets()) {
@@ -64,7 +64,7 @@ export function scrubLogLine(line: string): string {
     }
     return `${out}\n`;
   } catch {
-    return scrubCredentials(line).replace(QUOTED_PAIR, (match, name: string, value: string) =>
+    return scrubCredentials(line, { foreignTokens: true }).replace(QUOTED_PAIR, (match, name: string, value: string) =>
       value.length > 0 && isCredentialName(name) ? `"${name}=[REDACTED]` : match,
     );
   }

@@ -1,8 +1,14 @@
 {
-  "v": "1.0",
+  "v": "1.1",
   "host_list": [
-    "graph.facebook.com"
+    "graph.facebook.com",
+    "graph-video.facebook.com"
   ],
+  "host_rows": {
+    "graph-video.facebook.com": [
+      "POST /act_{id}/advideos"
+    ]
+  },
   "read_post": "^/(v\\d+\\.\\d+/)?(act_\\d+|\\d+)/insights$",
   "account_limit_keys": {
     "exact": [
@@ -183,7 +189,6 @@
           "creative.object_id",
           "creative.call_to_action",
           "creative.image_crops",
-          "creative.interactive_components_spec",
           "creative.portrait_customizations",
           "creative.categorization_criteria",
           "creative.link_url",
@@ -212,7 +217,6 @@
           "creative.object_id",
           "creative.call_to_action",
           "creative.image_crops",
-          "creative.interactive_components_spec",
           "creative.portrait_customizations",
           "creative.categorization_criteria",
           "creative.link_url",
@@ -241,7 +245,6 @@
           "creative.object_id",
           "creative.call_to_action",
           "creative.image_crops",
-          "creative.interactive_components_spec",
           "creative.portrait_customizations",
           "creative.categorization_criteria",
           "creative.link_url",
@@ -280,12 +283,12 @@
           "object_id",
           "call_to_action",
           "image_crops",
-          "interactive_components_spec",
           "portrait_customizations",
           "categorization_criteria",
           "link_url",
           "platform_customizations",
           "adlabels",
+          "creative_sourcing_spec",
           "execution_options"
         ]
       }
@@ -566,7 +569,6 @@
           "creative.object_id",
           "creative.call_to_action",
           "creative.image_crops",
-          "creative.interactive_components_spec",
           "creative.portrait_customizations",
           "creative.categorization_criteria",
           "creative.link_url",
@@ -1268,6 +1270,27 @@
       "is_primary",
       "adspixels.id",
       "adspixels.event_names"
+    ],
+    "creative_asset_groups_spec": [
+      "groups.images.hash",
+      "groups.videos.video_id",
+      "groups.texts.text",
+      "groups.texts.text_type",
+      "groups.call_to_action.type",
+      "groups.call_to_action.value.link"
+    ],
+    "cells": [
+      "name",
+      "treatment_percentage",
+      "control_percentage",
+      "adsets",
+      "campaigns",
+      "id"
+    ],
+    "creative_sourcing_spec": [
+      "site_links_spec.site_link_title",
+      "site_links_spec.site_link_url",
+      "site_links_spec.site_link_image_hash"
     ]
   },
   "coverage": [

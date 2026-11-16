@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { installEgressSpies, sampleArgs, tokenOf, type EgressSpies, type JSONSchema, type Override } from "./egress-helpers.js";
+import { installEgressSpies, sampleArgs, tokenOf, type EgressSpies, type JSONSchema, type Override, type RecordedRequest } from "./egress-helpers.js";
 import { fakeSecret, OTHER, SECRET, TOKEN } from "./fake-secrets.js";
 import { envReads, fetchNames, moduleLoads, normaliseSpecifier } from "./static-sweep.js";
 import { createMockMcpServer } from "../setup.js";
@@ -38,6 +38,14 @@ vi.mock("../../src/auth/meta-oauth.js", async (orig) => {
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const GRAPH = "graph.facebook.com";
+const VIDEO = "graph-video.facebook.com";
+/**
+ * Contract 1.1 §2 (C14): a request goes to graph.facebook.com, or to the video host as a video upload, a
+ * `POST /<v>/act_<n>/advideos`. The spies record no method: a POST is a request with a body (a GET has none).
+ */
+const fetchedHostOk = (r: RecordedRequest): boolean =>
+  r.url.host === GRAPH ||
+  (r.url.host === VIDEO && /^\/v\d+\.\d+\/act_\d+\/advideos$/.test(r.url.pathname) && r.body !== undefined && r.body !== null);
 /** The SDK client's own request timer: passed through, never collapsed. */
 const SDK_TIMEOUT_MS = 600_000;
 const PER_CALL_MS = 10_000;
@@ -77,7 +85,8 @@ const OVERRIDES: Record<string, Override> = {
 
 /** §5.3-group tools that make no Meta request, each with its reason. */
 const NO_REQUEST: Record<string, string> = {
-  ads_upload_ad_image: "M9: the server fetches no image URL; refused before any request (253 wires local files)",
+  ads_upload_ad_image: "M9: reads a local file under META_ADS_UPLOAD_DIR (none here); refused before any request",
+  ads_upload_ad_video: "M9: reads a local file under META_ADS_UPLOAD_DIR (none here); refused before any request",
 };
 
 const ENV: Record<string, string> = {
@@ -244,7 +253,7 @@ describe("stdio egress (done-whens 2, 5)", () => {
           const lookups = spies.dns.slice(dnsStart);
           perTool.set(tool.name, { requests, dns: lookups, args, said });
           for (const host of spies.connects.slice(connStart)) expect(host, `${tool.name} connected`).toBe(GRAPH);
-          for (const r of requests) expect(r.url.host, `${tool.name} fetched`).toBe(GRAPH);
+          for (const r of requests) expect(fetchedHostOk(r), `${tool.name} fetched ${r.url.host}${r.url.pathname}`).toBe(true);
           const argText = JSON.stringify(args);
           for (const host of lookups) {
             expect(host === GRAPH || argText.includes(host), `${tool.name} looked up ${host}`).toBe(true);
@@ -259,7 +268,7 @@ describe("stdio egress (done-whens 2, 5)", () => {
       await realTurn();
       const allArgs = JSON.stringify([...perTool.values()].map((t) => t.args));
       for (const host of spies.connects) expect(host, "a connect after its tool's window").toBe(GRAPH);
-      for (const r of spies.requests) expect(r.url.host, "a request after its tool's window").toBe(GRAPH);
+      for (const r of spies.requests) expect(fetchedHostOk(r), `a request after its tool's window: ${r.url.host}`).toBe(true);
       for (const host of spies.dns) expect(host === GRAPH || allArgs.includes(host), `late lookup of ${host}`).toBe(true);
       expect(perTool.size).toBe(tools.length);
       // A caller URL under an optional parent is sent too (the lead form's

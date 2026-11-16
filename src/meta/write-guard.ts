@@ -12,6 +12,7 @@ import {
   CONTRACT_VERSION,
   WriteRefusal,
   buildDescriptor,
+  keySetMiss,
   matchEndpoint,
   validateDescriptor,
   type Descriptor,
@@ -231,6 +232,14 @@ export class RealWriteGate implements WriteGate {
     const problems = validateDescriptor(d);
     if (problems.length > 0) throw new WriteRefusal(oneLine(`invalid descriptor: ${problems.join("; ")}`));
     await this.runner.decide(d);
+    // M11 (spec check 3): a key outside the row's key set is refused after the allow, and the guard told so.
+    const miss = keySetMiss(d);
+    if (miss) {
+      const reason = miss.row === "no row" ? `${miss.key} matches no endpoint row` : `${miss.key} is not a key of ${miss.row}`;
+      const w = await this.runner.sendOutcome({ v: CONTRACT_VERSION, outcome_for: requestId, ok: false, meta_id: null, error: reason });
+      if (w !== null) ctx.warnings.push(w);
+      throw new WriteRefusal(reason);
+    }
     const row = matchEndpoint(d.method, d.path, d.object.type);
     return { requestId, label: row ? row.validate_only : null };
   }

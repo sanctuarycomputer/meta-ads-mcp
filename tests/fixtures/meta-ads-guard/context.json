@@ -1,5 +1,5 @@
 {
-  "v": "1.0",
+  "v": "1.1",
   "note": "The fixtures' shared world (meta-ads-guard.md §13). Every id is made up and starts 999. A fixture's brand_status overrides a brand's status here. Shapes follow design §6.2 (brand map, 250's brands.json is authoritative) and §6.3 (policy).",
   "brands": [
     {
@@ -9,7 +9,7 @@
       "entity": "USB Club LLC",
       "business_id": "9999000000000001",
       "ad_account": "act_9990000000000001",
-      "page_ids": ["9991000000000001"],
+      "page_ids": ["9991000000000001", "9991000000000006"],
       "instagram_user_ids": [],
       "card": "Visa ••0001",
       "currency": "USD",

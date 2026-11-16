@@ -1,6 +1,6 @@
 import { requestContext } from "../auth/token-store.js";
 import { validateMetaId } from "../utils/format.js";
-import { scrubCredentialsDeep, scrubErrorCredentials } from "../utils/scrub-credentials.js";
+import { scrubCredentialsDeep, scrubErrorCredentials, withHeldSecret } from "../utils/scrub-credentials.js";
 import { metaApiClient } from "./client.js";
 
 /**
@@ -11,23 +11,27 @@ import { metaApiClient } from "./client.js";
  * forms (with pages_manage_ads).
  */
 export async function withPageToken<T>(pageId: string, work: () => Promise<T>, timeoutMs?: number): Promise<T> {
-  const page = await metaApiClient.get<{ access_token?: string }>(
-    `/${validateMetaId(pageId, "page")}`,
-    { fields: "access_token" },
+  // Trimmed by readPageToken, as getAccessToken trims: the value sent, signed and scrubbed is one string.
+  const token = await metaApiClient.readPageToken(
+    validateMetaId(pageId, "page"),
     timeoutMs === undefined ? undefined : { timeoutMs },
   );
-  if (!page.access_token) {
+  if (!token) {
     throw new Error(`Meta returned no Page access token for page ${pageId}: the person has to manage the Page, with pages_manage_posts to edit its posts or pages_manage_ads for its lead forms.`);
   }
-  let result: T;
-  try {
-    result = await requestContext.run({ ...requestContext.getStore(), accessToken: page.access_token }, work);
-  } catch (err) {
-    throw scrubErrorCredentials(err, page.access_token);
-  }
-  // Whatever Meta answered with the Page token (a field it echoed, an
-  // expansion that reached the Page) goes back without it.
-  return scrubCredentialsDeep(result, page.access_token);
+  // Held for the work's duration, so every scrub inside it, and the two
+  // below, remove the token in each of its forms.
+  return withHeldSecret(token, async () => {
+    let result: T;
+    try {
+      result = await requestContext.run({ ...requestContext.getStore(), accessToken: token }, work);
+    } catch (err) {
+      throw scrubErrorCredentials(err, token);
+    }
+    // Whatever Meta answered with the Page token (a field it echoed, an
+    // expansion that reached the Page) goes back without it.
+    return scrubCredentialsDeep(result, token);
+  });
 }
 
 export async function grantedPermissions(): Promise<Set<string>> {

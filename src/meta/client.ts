@@ -13,14 +13,16 @@ import {
 import type { MetaApiError, MetaApiResponse } from "./types/common.js";
 import { collectAllPages } from "./paginator.js";
 import { assertMetaApiVersion, resolveMetaApiVersion } from "./api-version.js";
-import { isCredentialName, scrubCredentialsDeep, scrubErrorCredentials } from "../utils/scrub-credentials.js";
-import { ENDPOINTS, WriteRefusal, type GraphGet } from "./write-descriptor.js";
+import { cleanAnswer, isCredentialName, scrubCredentialsDeep, scrubErrorCredentials } from "../utils/scrub-credentials.js";
+import { ENDPOINTS, VIDEO_HOST, WriteRefusal, hostAllowed, matchEndpoint, type GraphGet } from "./write-descriptor.js";
 import { RealWriteGate, callContext, type CallContext, type WriteGate } from "./write-guard.js";
 
 // An error answer can quote the request, its token included (a Page token
 // while a Page action runs). It is cleaned before anything classifies, logs
 // or returns it.
 const withoutToken = scrubCredentialsDeep;
+// An error also loses a Meta-shaped token the call does not hold; an answer never does.
+const ERROR_SCRUB = { foreignTokens: true };
 
 const DEFAULT_BASE_URL = "https://graph.facebook.com";
 const DEFAULT_TIMEOUT = 30000;
@@ -51,14 +53,39 @@ const READ_POST = new RegExp(ENDPOINTS.read_post);
 
 const isReadServer = (): boolean => process.env.META_ADS_READ_ONLY === "1";
 
+/** Edges Graph answers with access tokens by default: a user's `accounts` are their Pages, each with its token. */
+export const TOKEN_EDGES = ["accounts"] as const;
+const REFUSED_FIELD_NAMES: ReadonlySet<string> = new Set(["access_token", ...TOKEN_EDGES]);
+
+/**
+ * The names a `fields` value asks for, at any expansion depth: percent-decoded until stable (each `%XX` of an ASCII
+ * byte, so a stray `%` cannot stop it), then every maximal run of `[A-Za-z0-9_]`, lower-cased.
+ */
+export function fieldNames(value: string): string[] {
+  let text = value;
+  for (;;) {
+    const next = text.replace(/%([0-7][0-9A-Fa-f])/g, (_m, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+    if (next === text) break;
+    text = next;
+  }
+  return (text.match(/[A-Za-z0-9_]+/g) ?? []).map((name) => name.toLowerCase());
+}
+
+// A fields value as Graph reads it: a string as it is, an array joined (buildFieldsParam), anything else as sent.
+const fieldsText = (value: unknown): string =>
+  Array.isArray(value) ? value.map(String).join(",") : typeof value === "string" ? value : JSON.stringify(value) ?? String(value);
+
 /**
  * Refuses, with `WriteRefusal`, a request the client never sends on either server (contract §2): a method
- * override or a Graph batch parameter (any case), a repeated multipart name, an `async_batch_requests` segment, a
+ * override or a Graph batch parameter (its name before the first `[`, in any case: `method[0]`, `batch[0][method]`), a repeated multipart name, an `async_batch_requests` segment, a
  * joined path (`/<version><path>`, checked raw, before `new URL` folds it) that is not plain, a base URL that is not
  * https on a listed host with no port or userinfo, or that is not exactly `https://<host>` (what is checked is
- * what the URL is built from); a field named `__proto__`, `constructor` or `prototype`; and on the read server
- * (`META_ADS_READ_ONLY=1`) any method but GET, except an insights report POST (`ENDPOINTS.read_post`). Nothing it
- * says quotes the path or a value.
+ * what the URL is built from), or whose host takes only other requests (`hostAllowed`, contract 1.1 §2: the video
+ * host takes only `POST /act_{id}/advideos`); a field named `__proto__`, `constructor` or `prototype`; and on the read
+ * server (`META_ADS_READ_ONLY=1`) any method but GET, except an insights report POST (`ENDPOINTS.read_post`).
+ * And a param named `fields` or `fields[…]` (any case) that asks for `access_token` or a token-bearing edge
+ * (`TOKEN_EDGES`), at any depth (spec check 1); `readPageToken`'s one request alone is exempt.
+ * Nothing it says quotes the path or a value.
  */
 export function checkRequestShape(
   method: string,
@@ -66,12 +93,20 @@ export function checkRequestShape(
   joined: string,
   params: Readonly<Record<string, unknown>>,
   multipartNames?: readonly string[],
+  opts?: { allowTokenField?: true },
 ): void {
   for (const key of [...Object.keys(params), ...(multipartNames ?? [])]) {
     assertFieldName(key);
-    const k = key.toLowerCase();
+    // Graph reads `method[0]` or `batch[0][method]` as the field before the bracket.
+    const k = key.split("[")[0].toLowerCase();
     if (OVERRIDE_NAMES.has(k)) throw new WriteRefusal(`a parameter named ${key} would override the HTTP method`);
     if (BATCH_NAMES.has(k)) throw new WriteRefusal(`a parameter named ${key} is a Graph batch`);
+  }
+  for (const [key, value] of Object.entries(params)) {
+    if (key.split("[")[0].toLowerCase() !== "fields" || opts?.allowTokenField) continue;
+    if (fieldNames(fieldsText(value)).some((name) => REFUSED_FIELD_NAMES.has(name))) {
+      throw new WriteRefusal(`the ${key.slice(0, 40)} parameter asks for an access token or a token-bearing edge (${TOKEN_EDGES.join(", ")})`);
+    }
   }
   if (multipartNames) {
     const seen = new Set<string>();
@@ -98,6 +133,10 @@ export function checkRequestShape(
   if (base.username !== "" || base.password !== "") throw new WriteRefusal("the base URL has userinfo");
   // The URL is built by joining this string: it must be the origin itself, with no path, query, fragment or slash.
   if (baseUrl !== `https://${base.hostname}`) throw new WriteRefusal("the base URL is not exactly https:// and its host");
+  // Contract 1.1 §2 (C14), after the checks above (their order and messages stand): a host with rows takes only them.
+  if (!hostAllowed(method, base.host, joined)) {
+    throw new WriteRefusal(`the host ${base.host} takes only ${(ENDPOINTS.host_rows[base.host] ?? []).join(", ")}`);
+  }
   if (isReadServer() && method !== "GET" && !(method === "POST" && READ_POST.test(joined))) {
     const path = joined.replace(/^\/v\d+\.\d+/, "");
     throw new WriteRefusal(`this server is read-only: ${method} ${path} is neither a GET nor an insights report`);
@@ -203,6 +242,50 @@ function noted<E>(ctx: CallContext | undefined, e: E): E {
 const heldCalls = new WeakSet<CallContext>();
 const closedCalls = new WeakSet<CallContext>();
 
+/** A write the guard allowed and the client never sent (it never reached `fetch`), and why. */
+export interface NotSentWrite {
+  method: string;
+  path: string;
+  error: string;
+}
+
+const isClientError = (status: number | null) => status !== null && status >= 400 && status < 500;
+
+/** What became of a write past the gate (see `lastWriteFate`). */
+export type WriteFate = "ok" | "failed" | "unknown" | "not-sent";
+
+// Per call: the writes allowed and never sent (spec check 3, "not sent is not sent"), and the latest write's fate.
+const notSentCalls = new WeakMap<CallContext, NotSentWrite[]>();
+const writeFates = new WeakMap<CallContext, WriteFate>();
+
+/** The call's writes that the guard allowed and the client never sent, in order. Never in `ctx.sent`. */
+export function notSentOf(ctx: CallContext): readonly NotSentWrite[] {
+  return notSentCalls.get(ctx) ?? [];
+}
+
+/**
+ * The fate of the call's most recent write past the gate: `not-sent` when it never reached `fetch`; `failed` when
+ * every attempt sent was answered with a 4xx; `unknown` when any attempt reached `fetch` and ended with no answer
+ * (timeout, abort, transport error), a 5xx, or any other answer it could not use (a 2xx whose body would not read),
+ * even if a resend then answered 4xx; `ok` on
+ * success; `null` when no write of the call got past the gate (a refusal from the shape check or the gate shows as
+ * the call's refusal instead).
+ */
+export function lastWriteFate(ctx: CallContext): WriteFate | null {
+  return writeFates.get(ctx) ?? null;
+}
+
+/**
+ * What `execute` tells its caller about the wire: whether `fetch` was reached, the last answer's HTTP status, and
+ * whether an earlier attempt reached `fetch` and ended without a 4xx (no answer, a 5xx, an unreadable answer): that
+ * attempt may have written, so the write's fate stays unknown whatever a resend answers.
+ */
+interface Wire {
+  fetched: boolean;
+  status: number | null;
+  lost: boolean;
+}
+
 /** Whether the validate-only stop refused a write of this call (the write was held back, not sent). */
 export function validateOnlyHeld(ctx: CallContext): boolean {
   return heldCalls.has(ctx);
@@ -227,7 +310,7 @@ const VALIDATE_ONLY_FORM = JSON.stringify(VALIDATE_ONLY);
 
 type Encoded = { url: string; init?: RequestInit };
 
-interface RequestScope {
+export interface RequestScope {
   accountId?: string;
   // A call with a hard end, for work that has to fit a deadline: it is never
   // retried, it is not sent at all if pacing would hold it past this many
@@ -374,18 +457,26 @@ export class MetaApiClient {
     params?: Record<string, string | number | boolean | undefined>,
     scope?: RequestScope,
   ): Promise<T> {
-    const url = this.buildUrl(path, params);
+    const url = this.buildUrl("GET", path, params);
     return this.execute<T>("GET", url, path, params ?? {}, undefined, scope);
   }
 
   async post<T>(
     path: string,
     body?: Record<string, unknown>,
+    scope?: RequestScope,
   ): Promise<T> {
     const decoded = decodedIn(() => {
-      const out = body === undefined
+      // One deep copy, taken once: it is what the descriptor reads and what is sent, whatever the caller does after.
+      let copy: Record<string, unknown> | undefined;
+      try {
+        copy = structuredClone(body);
+      } catch {
+        throw new WriteRefusal("the body cannot be copied: it holds a value that is not plain data");
+      }
+      const out = copy === undefined
         ? {}
-        : Object.fromEntries(Object.entries(body).filter(([key]) => !isAccessTokenName(key)));
+        : Object.fromEntries(Object.entries(copy).filter(([key]) => !isAccessTokenName(key)));
       for (const [key, value] of Object.entries(out)) {
         assertFieldName(key);
         assertSendable(key, value);
@@ -393,13 +484,13 @@ export class MetaApiClient {
       return out;
     });
     return this.sendWrite<T>("POST", path, decoded, VALIDATE_ONLY, (p) => ({
-      url: this.buildUrl(path),
+      url: this.buildUrl("POST", path),
       init: {
         headers: { "Content-Type": "application/json" },
         // No body and nothing added: sent as before, with no body at all.
         body: body === undefined && Object.keys(p).length === 0 ? undefined : JSON.stringify(p),
       },
-    }));
+    }), scope);
   }
 
   async postForm<T>(
@@ -408,7 +499,7 @@ export class MetaApiClient {
     scope?: RequestScope,
   ): Promise<T> {
     return this.sendWrite<T>("POST", path, decodedIn(() => decodeForm(params)), VALIDATE_ONLY_FORM, (p) => ({
-      url: this.buildUrl(path),
+      url: this.buildUrl("POST", path),
       init: {
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: encodeForm(p).toString(),
@@ -419,27 +510,31 @@ export class MetaApiClient {
   async postMultipart<T>(
     path: string,
     formData: FormData,
+    scope?: RequestScope,
   ): Promise<T> {
-    // The token travels only in the header.
-    for (const name of [...new Set(formData.keys())]) {
-      if (isAccessTokenName(name)) formData.delete(name);
-    }
-    const names = [...formData.keys()];
+    // The caller's entries, taken once before anything else; the caller's form is never read again or sent. The token
+    // travels only in the header.
+    const snapshot = [...formData.entries()].filter(([name]) => !isAccessTokenName(name));
+    const names = snapshot.map(([name]) => name);
     const decoded = decodedIn(() => {
       const out: Record<string, unknown> = {};
-      for (const [name, value] of formData.entries()) {
+      for (const [name, value] of snapshot) {
         assertFieldName(name);
         out[name] = typeof value === "string" ? decodeFormValue(name, value) : MULTIPART_FILE;
       }
       return out;
     });
     return this.sendWrite<T>("POST", path, decoded, VALIDATE_ONLY_FORM, (p) => {
-      // The caller's form goes as it is; only execution_options is added to it.
-      if (p.execution_options !== undefined && !formData.has("execution_options")) {
-        formData.append("execution_options", encodeValue(p.execution_options));
+      // A new form of the snapshot's entries: each string re-encoded from what the descriptor read, each file the
+      // snapshot's own object (the snapshot decides which is which, never the decoded text).
+      const sent = new FormData();
+      for (const [name, value] of snapshot) {
+        if (typeof value === "string") sent.append(name, encodeValue(p[name]));
+        else sent.append(name, value);
       }
-      return { url: this.buildUrl(path), init: { body: formData } };
-    }, undefined, names);
+      if (p.execution_options !== undefined) sent.append("execution_options", encodeValue(p.execution_options));
+      return { url: this.buildUrl("POST", path), init: { body: sent } };
+    }, scope, names);
   }
 
   /**
@@ -455,10 +550,10 @@ export class MetaApiClient {
     return this.sendWrite<T>("DELETE", path, decodedIn(() => decodeForm(params ?? {})), VALIDATE_ONLY_FORM, (p) =>
       opts?.formBody
         ? {
-          url: this.buildUrl(path),
+          url: this.buildUrl("DELETE", path),
           init: { headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: encodeForm(p).toString() },
         }
-        : { url: this.buildUrl(path, Object.fromEntries(Object.entries(p).map(([k, v]) => [k, encodeValue(v)]))) },
+        : { url: this.buildUrl("DELETE", path, Object.fromEntries(Object.entries(p).map(([k, v]) => [k, encodeValue(v)]))) },
     scope);
   }
 
@@ -500,13 +595,13 @@ export class MetaApiClient {
     token: string,
   ): Promise<T | undefined> {
     // A request it must never send is refused, not quietly dropped.
-    checkRequestShape("GET", this.baseUrl, this.joined(path), params);
+    checkRequestShape("GET", this.baseFor("GET", this.joined(path)), this.joined(path), params);
     const tokenHash = hashToken(token);
     const accountId = extractAccountId(path);
     if (this.circuitBreaker.isOpen({ tokenHash, accountId, type: guessBucType("GET", path) })) return undefined;
     if (this.rateLimiter.getThrottleDelay({ tokenHash, accountId }) > 0) return undefined;
 
-    const url = new URL(this.buildUrl(path, params));
+    const url = new URL(this.buildUrl("GET", path, params));
     let auth: { Authorization: string };
     try {
       auth = signGraphRequest(url, token);
@@ -519,7 +614,21 @@ export class MetaApiClient {
     const response = await fetch(url.toString(), { method: "GET", signal, redirect: "error", headers: auth });
     const body = (await response.json()) as unknown;
     if (!response.ok || isMetaApiError(body)) return undefined;
-    return body as T;
+    return cleanAnswer(body) as T;
+  }
+
+  /**
+   * The one read of a Page token (spec check 1): `GET /{page}` with the constant `fields=access_token`, the only
+   * request exempt from the fields refusal and the only answer not cleaned. Returns the token trimmed, or "" when
+   * Meta answered without one. Only `withPageToken` calls it (a static test asserts it).
+   */
+  async readPageToken(pageId: string, scope?: RequestScope): Promise<string> {
+    if (!/^\d+$/.test(pageId)) throw new Error("readPageToken: the page id must be digits only.");
+    const path = `/${pageId}`;
+    const params = { fields: "access_token" };
+    const url = this.buildUrl("GET", path, params);
+    const page = await this.execute<{ access_token?: unknown }>("GET", url, path, params, undefined, scope, undefined, true);
+    return typeof page?.access_token === "string" ? page.access_token.trim() : "";
   }
 
   /** The whole process's state, every tenant's: for tests and the logs. */
@@ -579,7 +688,7 @@ export class MetaApiClient {
     const ctx = callContext.getStore();
     if (ctx && closedCalls.has(ctx)) throw new WriteRefusal("the tool call already returned");
     try {
-      checkRequestShape(method, this.baseUrl, this.joined(path), decoded, multipartNames);
+      checkRequestShape(method, this.baseFor(method, this.joined(path)), this.joined(path), decoded, multipartNames);
     } catch (e) {
       throw noted(ctx, e);
     }
@@ -612,11 +721,23 @@ export class MetaApiClient {
     }
 
     let result: T;
+    const wire: Wire = { fetched: false, status: null, lost: false };
     try {
-      result = await this.execute<T>(method, encoded.url, path, params, encoded.init, scope);
+      result = await this.execute<T>(method, encoded.url, path, params, encoded.init, scope, wire);
     } catch (e) {
       const error = scrubbedMessage(e);
-      if (!(e instanceof WriteRefusal)) ctx?.sent.push({ method, path: reqPath, label: gate.label, ok: false, answer: error });
+      if (!wire.fetched) {
+        // Never reached fetch: Meta never saw it. Not a write sent, whatever the reason.
+        if (ctx) {
+          const list = notSentCalls.get(ctx) ?? [];
+          list.push({ method, path: reqPath, error });
+          notSentCalls.set(ctx, list);
+          writeFates.set(ctx, "not-sent");
+        }
+      } else {
+        ctx?.sent.push({ method, path: reqPath, label: gate.label, ok: false, answer: error });
+        if (ctx) writeFates.set(ctx, !wire.lost && isClientError(wire.status) ? "failed" : "unknown");
+      }
       await this.recordOutcome(ctx, gate.requestId, { ok: false, metaId: null, error });
       throw noted(ctx, e);
     } finally {
@@ -626,6 +747,7 @@ export class MetaApiClient {
     const metaId = answer !== null && typeof answer === "object" && typeof (answer as { id?: unknown }).id === "string"
       ? (answer as { id: string }).id
       : null;
+    if (ctx) writeFates.set(ctx, "ok");
     ctx?.sent.push({ method, path: reqPath, label: gate.label, ok: true, answer: scrubbedAnswer(answer) });
     await this.recordOutcome(ctx, gate.requestId, { ok: true, metaId, error: null });
     return result;
@@ -640,12 +762,25 @@ export class MetaApiClient {
     if (warning !== null) ctx?.warnings.push(warning);
   }
 
+  /**
+   * The base URL a request goes to (contract 1.1 §2, `host_rows`): a `POST` matching the row
+   * `POST /act_{id}/advideos` goes to the video host; every other request to this client's base URL. The row is a
+   * POST row, so matching it with the request's own method is the method test too.
+   */
+  private baseFor(method: string, joinedPath: string): string {
+    if (matchEndpoint(method, joinedPath, "video")?.id === "POST /act_{id}/advideos") {
+      return `https://${VIDEO_HOST}`;
+    }
+    return this.baseUrl;
+  }
+
   private buildUrl(
+    method: string,
     path: string,
     params?: Record<string, string | number | boolean | undefined>,
   ): string {
-    const base = `${this.baseUrl}/${this.apiVersion}${path.startsWith("/") ? path : `/${path}`}`;
-    const url = new URL(base);
+    const joined = this.joined(path);
+    const url = new URL(`${this.baseFor(method, joined)}${joined}`);
 
     if (params) {
       for (const [key, value] of Object.entries(params)) {
@@ -665,11 +800,14 @@ export class MetaApiClient {
     params: Readonly<Record<string, unknown>>,
     options?: RequestInit,
     scope?: RequestScope,
+    wire?: Wire,
+    tokenRead?: true,
   ): Promise<T> {
     const ctx = callContext.getStore();
     const multipartNames = options?.body instanceof FormData ? [...options.body.keys()] : undefined;
     try {
-      checkRequestShape(method, this.baseUrl, this.joined(path), params, multipartNames);
+      const shape = tokenRead ? { allowTokenField: true as const } : undefined;
+      checkRequestShape(method, this.baseFor(method, this.joined(path)), this.joined(path), params, multipartNames, shape);
     } catch (e) {
       throw noted(ctx, e);
     }
@@ -727,13 +865,17 @@ export class MetaApiClient {
     // duplicates on retry. A Page's /leadgen_forms creates a lead form the
     // same way, /photos a Page photo, and a form's /test_leads a test lead
     // (one per form: a retry after a lost answer is refused as a second one).
+    // An object's /budget_schedules creates a budget schedule, and a POST to an
+    // object's /insights an async report run: both mint one per request.
     // Other POSTs (updates on /<id>) and DELETEs are idempotent at the API
     // level.
     const isCreatingRequest =
       method === "POST" &&
       (/^\/?act_[A-Za-z0-9]+\//.test(path) ||
         /\/copies$/.test(path) ||
-        /\/(message_templates|flows|message_qrdls|request_code|leadgen_forms|photos|test_leads|ad_studies)$/.test(path));
+        /\/(message_templates|flows|message_qrdls|request_code|leadgen_forms|photos|test_leads|ad_studies)$/.test(path) ||
+        /\/budget_schedules$/.test(path) ||
+        /\/insights$/.test(path));
     const canRetryTransport = !isCreatingRequest;
     const maxRetries = endBy === undefined && !scope?.noRetry ? this.maxRetries : 0;
     const timeout = endBy === undefined ? this.timeout : Math.max(1, endBy - Date.now());
@@ -748,6 +890,12 @@ export class MetaApiClient {
           timeout,
         );
 
+        // Past here the request may reach Meta: whatever happens next is not "not sent".
+        if (wire) {
+          if (wire.fetched && !isClientError(wire.status)) wire.lost = true;
+          wire.fetched = true;
+          wire.status = null;
+        }
         const response = await fetch(reqUrl, {
           method,
           ...options,
@@ -755,6 +903,8 @@ export class MetaApiClient {
           redirect: "error",
           signal: controller.signal,
         });
+
+        if (wire) wire.status = response.status;
 
         // A bounded call keeps its abort armed until the answer is read.
         if (endBy === undefined) clearTimeout(timeoutId);
@@ -783,7 +933,7 @@ export class MetaApiClient {
         }
 
         if (isMetaApiError(body)) {
-          const metaError = scope?.withholdMessage ? withheld(body.error) : withoutToken(body.error, token);
+          const metaError = scope?.withholdMessage ? withheld(body.error) : withoutToken(body.error, token, ERROR_SCRUB);
           const classification = classifyMetaError(metaError);
           this.logMetaError(metaError, classification, context, path);
 
@@ -822,7 +972,8 @@ export class MetaApiClient {
           throw lastError;
         }
 
-        return body as T;
+        // Every answer is cleaned before any caller sees it (spec check 1), but the Page token's one read.
+        return (tokenRead ? body : cleanAnswer(body)) as T;
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") {
           lastError = new Error(`Request timeout after ${timeout}ms`);
@@ -851,7 +1002,7 @@ export class MetaApiClient {
           throw scrubErrorCredentials(error, token);
         }
 
-        lastError = error instanceof Error ? scrubErrorCredentials(error, token) : new Error(withoutToken(String(error), token));
+        lastError = error instanceof Error ? scrubErrorCredentials(error, token) : new Error(withoutToken(String(error), token, ERROR_SCRUB));
         if (canRetryTransport && attempt < maxRetries) {
           await this.backoff(attempt);
           continue;

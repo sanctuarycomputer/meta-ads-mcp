@@ -1,0 +1,82 @@
+{
+  "name": "lead-form-asset-feed",
+  "covers": [
+    "lead-form-asset-feed"
+  ],
+  "decided_by": "rule 8",
+  "why": "a lead form inside asset_feed_spec, a path outside the bounded list",
+  "for": "both",
+  "brand_status": {
+    "usb": "ready"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000160",
+    "tool": "ads_create_ad_creative",
+    "method": "POST",
+    "path": "/act_9990000000000001/adcreatives",
+    "params_keys": [
+      "name",
+      "object_story_spec",
+      "asset_feed_spec",
+      "object_story_spec.page_id",
+      "asset_feed_spec.bodies.text",
+      "asset_feed_spec.call_to_actions.value.lead_gen_form_id"
+    ],
+    "ad_account": "act_9990000000000001",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "creative",
+      "id": null,
+      "created": true
+    },
+    "status": {
+      "before": null,
+      "after": null
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [],
+    "identity": [
+      {
+        "field": "object_story_spec.page_id",
+        "via": "direct",
+        "id": "9991000000000001",
+        "owner_page": "9991000000000001",
+        "owner_ig": null
+      },
+      {
+        "field": "object_story_spec.link_data.call_to_action.value.lead_gen_form_id",
+        "via": "asset_feed_spec",
+        "id": "9998000000000860",
+        "owner_page": "9991000000000001",
+        "owner_ig": null
+      }
+    ],
+    "kind": "create",
+    "account_limit": false,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": false,
+    "reason": "rule 8: unrecognised write: kind create at /act_9990000000000001/adcreatives",
+    "basis": null,
+    "receipt": "fake-receipt-lead-form-asset-feed"
+  },
+  "reason_has": [
+    "create",
+    "/act_9990000000000001/adcreatives"
+  ]
+}
