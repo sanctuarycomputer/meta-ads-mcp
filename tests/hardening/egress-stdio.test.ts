@@ -327,6 +327,7 @@ const FORBIDDEN = new Set(["http", "https", "net", "tls", "http2", "dgram", "dns
 const ALLOWED: Record<string, string[]> = {
   "src/utils/url-guard.ts": ["dns", "net"],
   "src/media/ffmpeg.ts": ["child_process"],
+  "src/meta/write-guard.ts": ["child_process"],
 };
 
 describe("static egress sweeps", () => {
