@@ -172,31 +172,31 @@ async function groupToolNames(): Promise<Set<string>> {
   return names;
 }
 
-beforeAll(async () => {
-  for (const [k, v] of Object.entries(ENV)) {
-    savedEnv[k] = process.env[k];
-    process.env[k] = v;
-  }
-  process.argv = [savedArgv[0], savedArgv[1], "--transport", "stdio"];
-  const { tokenManager } = await import("../../src/auth/token-manager.js");
-  tokenManager.resetForTests();
-  spies = installEgressSpies();
-  await startServers();
-  // Loading every tool module under a busy suite can pass the 10 s default.
-}, 120_000);
-
-afterAll(async () => {
-  for (const close of closers) await close();
-  spies?.restore();
-  globalThis.setTimeout = realSetTimeout;
-  process.argv = savedArgv;
-  for (const [k, v] of Object.entries(savedEnv)) {
-    if (v === undefined) delete process.env[k];
-    else process.env[k] = v;
-  }
-});
-
 describe("stdio egress (done-whens 2, 5)", () => {
+  beforeAll(async () => {
+    for (const [k, v] of Object.entries(ENV)) {
+      savedEnv[k] = process.env[k];
+      process.env[k] = v;
+    }
+    process.argv = [savedArgv[0], savedArgv[1], "--transport", "stdio"];
+    const { tokenManager } = await import("../../src/auth/token-manager.js");
+    tokenManager.resetForTests();
+    spies = installEgressSpies();
+    await startServers();
+    // Loading every tool module under a busy suite can pass the 10 s default.
+  }, 120_000);
+
+  afterAll(async () => {
+    for (const close of closers) await close();
+    spies?.restore();
+    globalThis.setTimeout = realSetTimeout;
+    process.argv = savedArgv;
+    for (const [k, v] of Object.entries(savedEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
   it("server start makes no request, for the catalogue and §5.3's read and write servers", async () => {
     expect(tools.length).toBeGreaterThan(150);
     const all = new Set(tools.map((t) => t.name));
