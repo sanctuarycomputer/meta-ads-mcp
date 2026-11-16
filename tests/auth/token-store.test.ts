@@ -33,6 +33,29 @@ describe("getAccessToken", () => {
     expect(token).toBe("ctx-token");
   });
 
+  // Trimmed where it is read, so the value sent, signed, hashed and scrubbed
+  // is one string (meta-ads-mcp-251 final-2b R1).
+  it("trims a context, registered or env token", () => {
+    expect(requestContext.run({ accessToken: " ctx-token\n" }, () => getAccessToken())).toBe("ctx-token");
+    tokenManager.registerToken("main", "\tmanager-token \n");
+    tokenManager.setActiveToken("main");
+    expect(getAccessToken()).toBe("manager-token");
+    tokenManager.resetForTests();
+    process.env.META_ACCESS_TOKEN = "env-token\r\n";
+    expect(getAccessToken()).toBe("env-token");
+  });
+
+  it("trims an env token set after the token registry loaded empty", () => {
+    expect(() => getAccessToken()).toThrow(/No Meta access token available/);
+    process.env.META_ACCESS_TOKEN = " late-env-token\n";
+    expect(getAccessToken()).toBe("late-env-token");
+  });
+
+  it("never lets a blank context token fall back to the process token", () => {
+    process.env.META_ACCESS_TOKEN = "env-token";
+    expect(requestContext.run({ accessToken: "  \n" }, () => getAccessToken())).toBe("");
+  });
+
   it("throws when no token is available", () => {
     expect(() => getAccessToken()).toThrow(
       /No Meta access token available/,

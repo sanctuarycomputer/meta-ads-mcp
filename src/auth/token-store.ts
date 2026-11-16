@@ -26,19 +26,23 @@ export const requestContext = new AsyncLocalStorage<RequestContext>();
  *  3. META_ACCESS_TOKEN env var (legacy fallback)
  */
 export function getAccessToken(): string {
+  // Each source is trimmed here, once, so the value sent, signed, hashed and
+  // scrubbed is one string. A blank token is returned as "", not passed over
+  // for the next source: the client refuses it rather than send another
+  // token in its place.
   const ctx = requestContext.getStore();
   if (ctx?.accessToken) {
-    return ctx.accessToken;
+    return ctx.accessToken.trim();
   }
 
   const managerToken = tokenManager.getActiveToken();
   if (managerToken) {
-    return managerToken;
+    return managerToken.trim();
   }
 
   const envToken = process.env.META_ACCESS_TOKEN;
   if (envToken) {
-    return envToken;
+    return envToken.trim();
   }
 
   throw new Error(

@@ -491,7 +491,7 @@ Notes:
 
 - To switch to a `lifetime_budget`, pass `lifetime_budget` together with `end_time` (ISO 8601). Meta rejects a `lifetime_budget` on an ad set with no `end_time`.
 - Changing `bid_amount`, `bid_strategy`, or replacing `targeting` can re-trigger Meta's learning phase.
-- Under the hood the tool issues `POST /v26.0/<adset_id>` against the Meta Graph API, routed through the shared client (rate-limit, write-pacer, circuit-breaker, error classifier). See [src/tools/adsets.ts](src/tools/adsets.ts) for the full schema.
+- Under the hood the tool issues `POST /v27.0/<adset_id>` against the Meta Graph API, routed through the shared client (rate-limit, write-pacer, circuit-breaker, error classifier). See [src/tools/adsets.ts](src/tools/adsets.ts) for the full schema.
 
 ### Working with custom audiences
 
@@ -718,7 +718,7 @@ TOKEN_ENCRYPTION_KEY=$(openssl rand -hex 32)
 SESSION_COOKIE_SECRET=$(openssl rand -base64 32)
 OAUTH_SECRET=$(openssl rand -hex 32)
 FIRESTORE_PROJECT_ID=my-gcp-project   # or use the emulator
-META_API_VERSION=v26.0                # optional; this is the default
+META_API_VERSION=v27.0                # optional; this is the default
 ```
 
 ### Google Cloud Run (reference deploy)

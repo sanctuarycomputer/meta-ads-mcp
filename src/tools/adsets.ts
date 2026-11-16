@@ -129,7 +129,6 @@ const adSetIdentityFields = ["id", "name", "campaign_id", "status", "effective_s
 const cloneTargetAdSetSchema = z.object({
   name: z.string().min(1).describe("Name for the cloned ad set"),
   geo_override: geoLocationSchema.describe("Geo override that REPLACES the source geo_locations (for example, { countries: ['CL'] }). Cities/regions/zips from the source are NOT inherited."),
-  status: z.enum(["ACTIVE", "PAUSED"]).default("PAUSED").describe("Status for the cloned ad set and ads. Defaults to PAUSED."),
   daily_budget: z.number().optional().describe(`Optional daily budget override ${MINOR_UNIT_NOTE}. Takes precedence over the source budget, regardless of source budget type.`),
   lifetime_budget: z.number().optional().describe("Optional lifetime budget override, in the same unit as daily_budget. Requires end_time."),
   end_time: z.string().optional().describe("ISO 8601 end time. Required when lifetime_budget is set."),
@@ -407,7 +406,7 @@ export function registerAdSetTools(server: McpServer): void {
   server.registerTool(
     "ads_clone_ad_set_bundle",
     {
-      description: `${WRITE_WARNING}Clone an ad set bundle in one operation: reads a source ad set, clones its targeting/budget/pixel setup into a new ad set, and recreates every ad by duplicating it with Meta's native ad-copy endpoint (POST /{ad_id}/copies). Native copy gives 100% creative-type coverage — link, image, video, carousel, collection, catalog/Advantage+ catalog, dynamic (asset_feed_spec), and boosted posts all clone losslessly, with the destination ad set's pixel applied automatically. Designed for workflows like duplicating a GEO-specific ad set to another country with a different pixel while keeping every new resource PAUSED by default. creative_overrides change copy per source ad: on standard (object_story_spec) creatives the override is applied by swapping a modified creative onto the copied ad; on dynamic or otherwise non-patchable creatives the override cannot be applied and is reported in warnings while the ad remains in created_ads. If a single ad fails to copy it is reported in skipped and the rest proceed. Supports dry_run planning and idempotency_key-based retry safety. The copied targeting is adapted to the Marketing API version in use before the ad set is created: placements Meta has removed (Facebook video_feeds, Instagram explore, Messenger story) are dropped, and a missing Advantage+ audience setting becomes an explicit opt-out (advantage_audience 0). The clone is refused, before anything is created, when dropping a placement would widen delivery or leave no placements. Every adjustment is listed in warnings, including on dry runs. A creative swapped in by creative_overrides keeps the source creative's destination setting (destination_spec) and WhatsApp Status identity (wamo_whatsapp_identity_spec) when Meta reports them; when it reports none, the new creative sends none and follows Meta's defaults.`,
+      description: `${WRITE_WARNING}Clone an ad set bundle in one operation: reads a source ad set, clones its targeting/budget/pixel setup into a new ad set, and recreates every ad by duplicating it with Meta's native ad-copy endpoint (POST /{ad_id}/copies). Native copy gives 100% creative-type coverage — link, image, video, carousel, collection, catalog/Advantage+ catalog, dynamic (asset_feed_spec), and boosted posts all clone losslessly, with the destination ad set's pixel applied automatically. Designed for workflows like duplicating a GEO-specific ad set to another country with a different pixel while keeping every new resource PAUSED (always: turning them on is a separate update, which the spend guard checks). creative_overrides change copy per source ad: on standard (object_story_spec) creatives the override is applied by swapping a modified creative onto the copied ad; on dynamic or otherwise non-patchable creatives the override cannot be applied and is reported in warnings while the ad remains in created_ads. If a single ad fails to copy it is reported in skipped and the rest proceed. Supports dry_run planning and idempotency_key-based retry safety. The copied targeting is adapted to the Marketing API version in use before the ad set is created: placements Meta has removed (Facebook video_feeds, Instagram explore, Messenger story) are dropped, and a missing Advantage+ audience setting becomes an explicit opt-out (advantage_audience 0). The clone is refused, before anything is created, when dropping a placement would widen delivery or leave no placements. Every adjustment is listed in warnings, including on dry runs. A creative swapped in by creative_overrides keeps the source creative's destination setting (destination_spec) and WhatsApp Status identity (wamo_whatsapp_identity_spec) when Meta reports them; when it reports none, the new creative sends none and follows Meta's defaults.`,
       inputSchema: {
         account_id: z.string().describe("Ad account ID"),
         source_ad_set_id: z.string().describe("Source ad set ID to clone"),
@@ -426,10 +425,16 @@ export function registerAdSetTools(server: McpServer): void {
       const accountPath = normalizeAccountId(account_id);
       const sourceAdSetIdValidated = validateMetaId(source_ad_set_id, "adset");
 
+      // The signature keeps the shape the schema gave before status was
+      // removed (status third, always PAUSED), so a key stored then still
+      // matches the same default payload.
+      const { name: targetName, geo_override: targetGeo, status: _ignoredStatus, ...targetRest } =
+        target_ad_set as typeof target_ad_set & { status?: unknown };
+      void _ignoredStatus;
       const requestSignature = JSON.stringify({
         account_id: accountPath,
         source_ad_set_id: sourceAdSetIdValidated,
-        target_ad_set,
+        target_ad_set: { name: targetName, geo_override: targetGeo, status: "PAUSED", ...targetRest },
         creative_overrides,
       });
       const cacheKey = idempotency_key
@@ -501,10 +506,10 @@ export function registerAdSetTools(server: McpServer): void {
         applyGeoOverride(sourceAdSet.targeting, target_ad_set.geo_override),
         metaApiClient.apiVersion,
       );
-      const targetStatus = target_ad_set.status ?? "PAUSED";
-      // Force PAUSED unless the caller explicitly asked for ACTIVE — never
-      // INHERITED_FROM_SOURCE, which could silently activate a copy of an active ad.
-      const statusOption = targetStatus === "ACTIVE" ? "ACTIVE" : "PAUSED";
+      // The ad set and every copy are created PAUSED, whatever the caller
+      // passed; never INHERITED_FROM_SOURCE, which could silently activate a
+      // copy of an active ad. Turning them on is a separate, guarded update.
+      const targetStatus = "PAUSED";
 
       interface AdCopyPlan {
         sourceAd: Ad;
@@ -631,7 +636,7 @@ export function registerAdSetTools(server: McpServer): void {
       const createAdSetBody: Record<string, string | number | boolean> = {
         campaign_id: sourceAdSet.campaign_id,
         name: target_ad_set.name,
-        status: targetStatus,
+        status: "PAUSED",
         optimization_goal: sourceAdSet.optimization_goal,
         billing_event: sourceAdSet.billing_event,
         targeting: JSON.stringify(clonedTargeting),
@@ -690,7 +695,7 @@ export function registerAdSetTools(server: McpServer): void {
         //    for every creative type, inheriting the new ad set's pixel.
         const copyBody: Record<string, string | number | boolean> = {
           adset_id: newAdSet.id,
-          status_option: statusOption,
+          status_option: "PAUSED",
           // NO_RENAME suppresses Meta's localized "- Copy" suffix; we apply the
           // source→target name transform ourselves in step 2.
           rename_options: JSON.stringify({ rename_strategy: "NO_RENAME" }),
@@ -837,13 +842,12 @@ export function registerAdSetTools(server: McpServer): void {
   server.registerTool(
     "ads_create_ad_set",
     {
-      description: `${WRITE_WARNING}Create a new ad set within a campaign. Requires targeting specification, optimization goal, and destination_type (required for ODAX campaigns). Budget belongs at exactly one level: when the parent campaign has either daily_budget or lifetime_budget (campaign budget / CBO), omit both ad-set budget fields. Only pass daily_budget or lifetime_budget here for ad-set budget / ABO campaigns. Common destination_type values: WEBSITE (traffic/sales to website), APP (app installs), MESSENGER/WHATSAPP/INSTAGRAM_DIRECT (messaging), ON_AD (lead forms, instant experiences). Ad sets are created in PAUSED status by default. When age, gender, custom audiences or detailed targeting are not default and not relaxed, set targeting.targeting_automation.advantage_audience to 1 or 0 explicitly or Meta rejects the ad set.`,
+      description: `${WRITE_WARNING}Create a new ad set within a campaign. Requires targeting specification, optimization goal, and destination_type (required for ODAX campaigns). Budget belongs at exactly one level: when the parent campaign has either daily_budget or lifetime_budget (campaign budget / CBO), omit both ad-set budget fields. Only pass daily_budget or lifetime_budget here for ad-set budget / ABO campaigns. Common destination_type values: WEBSITE (traffic/sales to website), APP (app installs), MESSENGER/WHATSAPP/INSTAGRAM_DIRECT (messaging), ON_AD (lead forms, instant experiences). Ad sets are always created PAUSED; turn one on with ads_update_ad_set status ACTIVE, which the spend guard checks. When age, gender, custom audiences or detailed targeting are not default and not relaxed, set targeting.targeting_automation.advantage_audience to 1 or 0 explicitly or Meta rejects the ad set.`,
       inputSchema: {
         account_id: z.string().describe("Ad account ID"),
         campaign_id: z.string().describe("Parent campaign ID"),
         name: z.string().min(1).describe("Ad set name"),
         destination_type: destinationTypeEnum.describe("Where the ad traffic is directed. Required for ODAX campaigns. Common values: WEBSITE (website traffic/conversions), APP (app installs), MESSENGER (Messenger conversations), WHATSAPP (WhatsApp conversations), INSTAGRAM_DIRECT (Instagram DMs), ON_AD (lead forms, instant experiences, post engagement), ON_VIDEO (video views), ON_PAGE (page engagement), SHOP_AUTOMATIC (shop)"),
-        status: z.enum(["ACTIVE", "PAUSED"]).default("PAUSED"),
         daily_budget: z.number().optional().describe(`Ad-set daily budget ${MINOR_UNIT_NOTE}. Omit when the parent campaign has a daily or lifetime budget.`),
         lifetime_budget: z.number().optional().describe("Ad-set lifetime budget, in the same unit as daily_budget. Omit when the parent campaign has a daily or lifetime budget."),
         optimization_goal: optimizationGoalEnum.describe("Optimization goal"),
@@ -870,7 +874,7 @@ export function registerAdSetTools(server: McpServer): void {
       annotations: { ...CREATE },
     },
     async ({
-      account_id, campaign_id, name, destination_type, status, daily_budget, lifetime_budget,
+      account_id, campaign_id, name, destination_type, daily_budget, lifetime_budget,
       optimization_goal, billing_event, bid_amount, bid_strategy, targeting,
       start_time, end_time, promoted_object, is_dynamic_creative,
       dsa_beneficiary, dsa_payor, attribution_spec, frequency_control_specs,
@@ -882,7 +886,7 @@ export function registerAdSetTools(server: McpServer): void {
         campaign_id: campaignIdValidated,
         name,
         destination_type,
-        status,
+        status: "PAUSED",
         optimization_goal,
         billing_event,
         targeting: JSON.stringify(targeting),
@@ -908,7 +912,7 @@ export function registerAdSetTools(server: McpServer): void {
         content: [
           {
             type: "text",
-            text: `Ad set created successfully!\nID: ${result.id}\nName: ${name}\nCampaign: ${campaignIdValidated}\nStatus: ${status}\nOptimization: ${optimization_goal}${amountLines}`,
+            text: `Ad set created successfully!\nID: ${result.id}\nName: ${name}\nCampaign: ${campaignIdValidated}\nStatus: PAUSED\nOptimization: ${optimization_goal}${amountLines}`,
           },
         ],
       };

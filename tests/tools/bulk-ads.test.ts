@@ -371,13 +371,12 @@ describe("registerBulkAdTools", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("defaults the ad status to PAUSED in the schema", () => {
+    it("has no status input; ads are always PAUSED", () => {
       const tool = handlerFor("ads_bulk_create_video_ads");
-      const schema = tool.schema as { status: { parse: (value: unknown) => unknown } };
-      expect(schema.status.parse(undefined)).toBe("PAUSED");
+      expect("status" in (tool.schema as Record<string, unknown>)).toBe(false);
     });
 
-    it("sends the chosen status when creating the ad", async () => {
+    it("sends status PAUSED when creating the ad", async () => {
       const tool = handlerFor("ads_bulk_create_video_ads");
 
       const fetchMock = vi

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { editPost, findPostUsers, hasServableTemporary, type PostEditInput } from "../../src/meta/post-edit.js";
 import { metaApiClient } from "../../src/meta/client.js";
 import type { AdCreative } from "../../src/meta/types/index.js";
-import { setupTestToken, cleanupTestToken, mockFetchResponse, fetchCallSummary } from "../setup.js";
+import { setupTestToken, cleanupTestToken, mockFetchResponse, fetchCallSummary, bearerTokenOf } from "../setup.js";
 
 const LINK = "https://example.com/";
 const PAGE_TOKEN = "page-token-never-shown";
@@ -71,8 +71,7 @@ const READY = {
   "GET /6001": [{ id: "6001", access_token: PAGE_TOKEN }],
 };
 const body = (index: number) => new URLSearchParams(String(vi.mocked(fetch).mock.calls[index][1]?.body ?? ""));
-const tokenOf = (index: number) =>
-  new URL(String(vi.mocked(fetch).mock.calls[index][0])).searchParams.get("access_token") ?? body(index).get("access_token");
+const tokenOf = (index: number) => bearerTokenOf(vi.mocked(fetch).mock.calls[index][1]);
 const json = (value: string | null) => (value === null ? null : JSON.parse(value));
 const anyStatusWrite = () => vi.mocked(fetch).mock.calls.some((call) => body(vi.mocked(fetch).mock.calls.indexOf(call)).has("status"));
 

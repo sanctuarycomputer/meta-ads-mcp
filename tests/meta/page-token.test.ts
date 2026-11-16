@@ -3,11 +3,10 @@ import { grantedPermissions, withPageToken } from "../../src/meta/page-token.js"
 import { metaApiClient } from "../../src/meta/client.js";
 import { getAccessToken } from "../../src/auth/token-store.js";
 import { logger } from "../../src/utils/logger.js";
-import { setupTestToken, cleanupTestToken, mockFetchResponse } from "../setup.js";
+import { setupTestToken, cleanupTestToken, mockFetchResponse, bearerTokenOf } from "../setup.js";
 
 const PAGE_TOKEN = "page-token-never-shown";
-const tokenOf = (call: number) => new URL(String(vi.mocked(fetch).mock.calls[call][0])).searchParams.get("access_token")
-  ?? new URLSearchParams(String(vi.mocked(fetch).mock.calls[call][1]?.body ?? "")).get("access_token");
+const tokenOf = (call: number) => bearerTokenOf(vi.mocked(fetch).mock.calls[call][1]);
 
 describe("withPageToken", () => {
   beforeEach(() => {

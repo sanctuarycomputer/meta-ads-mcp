@@ -5,7 +5,7 @@ import {
   loadMetaOAuthConfig,
   oauthScopes,
 } from "../../src/auth/meta-oauth.js";
-import { mockFetchResponse } from "../setup.js";
+import { TEST_APP_SECRET, bearerTokenOf, mockFetchResponse } from "../setup.js";
 
 describe("Meta OAuth Graph API version", () => {
   const serverUrl = new URL("https://mcp.example.com");
@@ -21,7 +21,7 @@ describe("Meta OAuth Graph API version", () => {
     vi.restoreAllMocks();
   });
 
-  it("runs the login dialog and Graph calls on v26.0 by default", async () => {
+  it("runs the login dialog and Graph calls on v27.0 by default", async () => {
     vi.stubEnv("META_API_VERSION", undefined);
     vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockFetchResponse({ data: [] }));
 
@@ -29,22 +29,14 @@ describe("Meta OAuth Graph API version", () => {
     const dialogUrl = new URL(buildAuthorizeUrl(config!, "state-1"));
     await fetchPrimaryBusiness("token-x");
 
-    expect(dialogUrl.pathname).toBe("/v26.0/dialog/oauth");
+    expect(dialogUrl.pathname).toBe("/v27.0/dialog/oauth");
     const graphUrl = new URL(vi.mocked(globalThis.fetch).mock.calls[0][0] as string);
-    expect(graphUrl.pathname).toBe("/v26.0/me/businesses");
+    expect(graphUrl.pathname).toBe("/v27.0/me/businesses");
   });
 
-  it("follows META_API_VERSION for the login dialog and Graph calls", async () => {
+  it("refuses a META_API_VERSION other than v27.0 for the login dialog", () => {
     vi.stubEnv("META_API_VERSION", "v25.0");
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockFetchResponse({ data: [] }));
-
-    const config = loadMetaOAuthConfig(serverUrl);
-    const dialogUrl = new URL(buildAuthorizeUrl(config!, "state-1"));
-    await fetchPrimaryBusiness("token-x");
-
-    expect(dialogUrl.pathname).toBe("/v25.0/dialog/oauth");
-    const graphUrl = new URL(vi.mocked(globalThis.fetch).mock.calls[0][0] as string);
-    expect(graphUrl.pathname).toBe("/v25.0/me/businesses");
+    expect(() => loadMetaOAuthConfig(serverUrl)).toThrow(/v27\.0/);
   });
 });
 
@@ -88,10 +80,12 @@ describe("Meta OAuth scopes", () => {
 
 describe("fetchPrimaryBusiness", () => {
   beforeEach(() => {
+    vi.stubEnv("META_APP_SECRET", TEST_APP_SECRET);
     vi.spyOn(globalThis, "fetch");
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -102,14 +96,16 @@ describe("fetchPrimaryBusiness", () => {
       }),
     );
 
-    const result = await fetchPrimaryBusiness("token-x", "v22.0");
+    const result = await fetchPrimaryBusiness("token-x", "v27.0");
     expect(result).toEqual({ id: "1234567890", name: "Acme Corp" });
 
     const url = vi.mocked(globalThis.fetch).mock.calls[0][0] as string;
-    expect(url).toContain("/v22.0/me/businesses");
+    expect(url).toContain("/v27.0/me/businesses");
     expect(url).toContain("fields=id%2Cname");
     expect(url).toContain("limit=1");
-    expect(url).toContain("access_token=token-x");
+    expect(url).not.toContain("access_token");
+    expect(url).not.toContain("token-x");
+    expect(bearerTokenOf(vi.mocked(globalThis.fetch).mock.calls[0][1])).toBe("token-x");
   });
 
   it("returns null when the businesses list is empty", async () => {

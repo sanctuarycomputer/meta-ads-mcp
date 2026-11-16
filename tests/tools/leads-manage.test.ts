@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { registerLeadTools } from "../../src/tools/leads.js";
-import { createMockMcpServer, setupTestToken, cleanupTestToken, mockFetchResponse } from "../setup.js";
+import { createMockMcpServer, setupTestToken, cleanupTestToken, mockFetchResponse, bearerTokenOf } from "../setup.js";
 
 const guardState = vi.hoisted(() => ({ address: "93.184.216.34" }));
 
@@ -56,8 +56,8 @@ function calls(): string[] {
 }
 
 function tokenOf(call: number): string | null {
-  const [url, init] = vi.mocked(fetch).mock.calls[call];
-  return new URL(String(url)).searchParams.get("access_token") ?? new URLSearchParams(String(init?.body ?? "")).get("access_token");
+  const [, init] = vi.mocked(fetch).mock.calls[call];
+  return bearerTokenOf(init);
 }
 
 function bodyOf(call: number): URLSearchParams {
@@ -263,7 +263,8 @@ describe("lead forms: create, read, archive, test leads and connections", () => 
       expect(download.calls[0].options).toMatchObject({ allowPdf: true });
       const body = vi.mocked(fetch).mock.calls[1][1]?.body as FormData;
       expect(body).toBeInstanceOf(FormData);
-      expect(body.get("access_token")).toBe(PAGE_TOKEN);
+      expect(body.has("access_token")).toBe(false);
+      expect(bearerTokenOf(vi.mocked(fetch).mock.calls[1][1])).toBe(PAGE_TOKEN);
       expect((body.get("upload_gated_file") as File).name).toBe("gated-file.pdf");
       expect(JSON.parse(body.get("thank_you_page") as string)).toEqual({ title: "Your guide", body: "Here it is", button_type: "VIEW_ON_FACEBOOK", button_text: "See guide" });
       expect(JSON.parse(body.get("questions") as string)).toEqual(BASE_FORM.questions);

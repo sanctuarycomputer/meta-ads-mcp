@@ -1,5 +1,6 @@
 import { logger } from "../utils/logger.js";
-import { resolveMetaApiVersion } from "../meta/api-version.js";
+import { assertMetaApiVersion, resolveMetaApiVersion } from "../meta/api-version.js";
+import { signGraphRequest } from "../meta/client.js";
 
 const META_GRAPH = "https://graph.facebook.com";
 const META_OAUTH_DIALOG = "https://www.facebook.com";
@@ -91,7 +92,7 @@ export async function exchangeCodeForToken(
   url.searchParams.set("redirect_uri", config.redirectUri);
   url.searchParams.set("code", code);
 
-  const response = await fetch(url.toString());
+  const response = await fetch(url.toString(), { redirect: "error" });
   const body = (await response.json()) as Record<string, unknown>;
 
   if (!response.ok || body.error) {
@@ -123,7 +124,7 @@ export async function exchangeForLongLivedToken(
   url.searchParams.set("client_secret", config.appSecret);
   url.searchParams.set("fb_exchange_token", shortLivedToken);
 
-  const response = await fetch(url.toString());
+  const response = await fetch(url.toString(), { redirect: "error" });
   const body = (await response.json()) as Record<string, unknown>;
 
   if (!response.ok || body.error) {
@@ -155,14 +156,15 @@ export async function fetchProfile(
   accessToken: string,
   apiVersion: string = resolveMetaApiVersion(),
 ): Promise<MetaProfile> {
-  const url = new URL(`/${apiVersion}/me`, META_GRAPH);
+  const url = new URL(`/${assertMetaApiVersion(apiVersion)}/me`, META_GRAPH);
   url.searchParams.set(
     "fields",
     "id,name,email,picture.width(200).height(200)",
   );
-  url.searchParams.set("access_token", accessToken);
+  // Signed like every client request: the token only in the header.
+  const headers = signGraphRequest(url, accessToken);
 
-  const response = await fetch(url.toString());
+  const response = await fetch(url.toString(), { headers, redirect: "error" });
   const body = (await response.json()) as Record<string, unknown>;
 
   if (!response.ok || body.error) {
@@ -213,13 +215,15 @@ export async function fetchPrimaryBusiness(
   accessToken: string,
   apiVersion: string = resolveMetaApiVersion(),
 ): Promise<MetaBusiness | null> {
-  const url = new URL(`/${apiVersion}/me/businesses`, META_GRAPH);
+  // A refused version throws, as a refused default does; only a failed
+  // request (the missing secret included) reads as "no business".
+  const url = new URL(`/${assertMetaApiVersion(apiVersion)}/me/businesses`, META_GRAPH);
   url.searchParams.set("fields", "id,name");
   url.searchParams.set("limit", "1");
-  url.searchParams.set("access_token", accessToken);
 
   try {
-    const response = await fetch(url.toString());
+    const headers = signGraphRequest(url, accessToken);
+    const response = await fetch(url.toString(), { headers, redirect: "error" });
     const body = (await response.json()) as Record<string, unknown>;
 
     if (!response.ok || body.error) {

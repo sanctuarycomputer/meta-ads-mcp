@@ -24,28 +24,28 @@ A ⚠️ marks a tool that changes live data, spends money or touches stored cre
 
 - `ads_get_campaigns` — List the campaigns on an account, filterable by status.
 - `ads_get_campaign_details` — One campaign in full, including budget and special ad categories.
-- `ads_create_campaign` ⚠️ — Create a campaign, with a lifetime `spend_cap` (minor unit, like budgets) and the countries of a special ad category. Objective and special_ad_categories cannot be changed later.
-- `ads_update_campaign` ⚠️ — Change a campaign's name, status, budget or bid strategy.
+- `ads_create_campaign` ⚠️ — Create a campaign, always paused, with a lifetime `spend_cap` (minor unit, like budgets) and the countries of a special ad category. Objective and special_ad_categories cannot be changed later.
+- `ads_update_campaign` ⚠️ — Change a campaign's name, status, budget or bid strategy, or its lifetime `spend_cap` (whole currency, e.g. 1000 = USD 1,000.00; the tool converts it) or `remove_spend_cap`.
 - `ads_delete_campaign` ⚠️ — Delete a campaign and everything under it.
 
 ## Ad sets
 
 - `ads_get_ad_sets` — List the ad sets in a campaign or account.
 - `ads_get_ad_set_details` — One ad set in full, including its targeting spec.
-- `ads_create_ad_set` ⚠️ — Create an ad set: budget, schedule, optimization goal and targeting, plus attribution windows, a frequency cap and the EU transparency names. `is_dynamic_creative` makes it hold one dynamic-creative ad.
+- `ads_create_ad_set` ⚠️ — Create an ad set, always paused: budget, schedule, optimization goal and targeting, plus attribution windows, a frequency cap and the EU transparency names. `is_dynamic_creative` makes it hold one dynamic-creative ad.
 - `ads_update_ad_set` ⚠️ — Change an ad set's budget, schedule, status or targeting.
-- `ads_clone_ad_set_bundle` ⚠️ — Copy an ad set with its ads into another campaign, keeping creatives and targeting.
+- `ads_clone_ad_set_bundle` ⚠️ — Copy an ad set with its ads into another campaign, keeping creatives and targeting. The copies are always paused.
 - `ads_delete_ad_set` ⚠️ — Delete an ad set and its ads.
 
 ## Ads
 
 - `ads_get_ads` — List the ads in an ad set, campaign or account.
 - `ads_get_ad_details` — One ad in full. For a review, prefer ads_get_ad_dossier.
-- `ads_create_ad` ⚠️ — Create an ad from an existing creative, in an ad set, with its conversion domain and labels. `flexible_format` adds groups of media and texts (Sales and App campaigns).
+- `ads_create_ad` ⚠️ — Create an ad, always paused, from an existing creative, in an ad set, with its conversion domain and labels. `flexible_format` adds groups of media and texts (Sales and App campaigns).
 - `ads_update_ad` ⚠️ — Change an ad's name, status or creative.
 - `ads_update_ad_url_tags` ⚠️ — Rewrite the UTM tags of live ads by cloning each creative onto the same post. Skips ads with several text options unless allow_new_post.
 - `ads_update_ad_content` ⚠️ — Add, remove or replace the copy of live ads, or change link, button, media or a lead ad's form. Dry run first; shows what happens to likes and comments. `allow_post_edit` edits the post itself for one-text ads (needs `pages_manage_posts`).
-- `ads_duplicate_ad` ⚠️ — Copy an ad into other ad sets of its account. By default the copies share its post and Instagram media, so its likes, comments and shares carry over; needs an idempotency_key.
+- `ads_duplicate_ad` ⚠️ — Copy an ad into other ad sets of its account. By default the copies share its post and Instagram media, so its likes, comments and shares carry over; the copies are always paused; needs an idempotency_key.
 - `ads_get_ad_social_proof` — Likes, comments and shares behind ads, grouped by post, with every ad of the account that shows each post.
 - `ads_delete_ad` ⚠️ — Delete an ad. Pausing it with ads_activate_entity is reversible; this is not.
 
@@ -183,7 +183,7 @@ A ⚠️ marks a tool that changes live data, spends money or touches stored cre
 ## Agency macros
 
 - `ads_portfolio_summary` — Cross-account roll-up for an agency view.
-- `ads_bulk_create_video_ads` ⚠️ — Video URLs to live ads in one call: upload, wait, thumbnail, creative, ad.
+- `ads_bulk_create_video_ads` ⚠️ — Video URLs to paused ads in one call: upload, wait, thumbnail, creative, ad.
 
 ## Instagram
 
