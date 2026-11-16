@@ -1,6 +1,8 @@
 import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MetaApiClient, metaApiClient } from "../../src/meta/client.js";
+import { MetaApiClient, metaApiClient, signGraphRequest } from "../../src/meta/client.js";
+import { RateLimiter } from "../../src/meta/rate-limiter.js";
+import { WritePacer } from "../../src/meta/write-pacer.js";
 import { withPageToken } from "../../src/meta/page-token.js";
 import { tokenManager } from "../../src/auth/token-manager.js";
 import { TEST_APP_SECRET, bearerTokenOf, cleanupTestToken, mockFetchResponse, setupTestToken } from "../setup.js";
@@ -93,6 +95,20 @@ describe("every Graph request is signed with appsecret_proof", () => {
     expect(bearerTokenOf(calls()[1][1])).toBe(TOKEN);
   });
 
+  it("lets no caller header replace or sit beside the Bearer header", async () => {
+    // execute is the one choke point every method goes through; no public
+    // method passes caller headers today, so it is driven directly.
+    const execute = (client as unknown as { execute: (m: string, u: string, p: string, o?: RequestInit) => Promise<unknown> }).execute.bind(client);
+    await execute("GET", "https://graph.facebook.com/v27.0/me", "/me", { headers: { authorization: "Bearer other-token", "X-Extra": "1" } });
+    await execute("GET", "https://graph.facebook.com/v27.0/me", "/me", { headers: new Headers({ Authorization: "Bearer other-token", "X-Extra": "1" }) });
+    for (const [, init] of calls()) {
+      const headers = init?.headers as Record<string, string>;
+      const auth = Object.entries(headers).filter(([name]) => name.toLowerCase() === "authorization");
+      expect(auth).toEqual([["Authorization", `Bearer ${TOKEN}`]]);
+      expect(Object.entries(headers).find(([name]) => name.toLowerCase() === "x-extra")?.[1]).toBe("1");
+    }
+  });
+
   it("drops an access_token a caller put in a multipart form", async () => {
     const form = new FormData();
     form.set("access_token", "smuggled-token");
@@ -172,6 +188,21 @@ describe("every Graph request is signed with appsecret_proof", () => {
   });
 });
 
+describe("signGraphRequest", () => {
+  afterEach(() => {
+    delete process.env.META_APP_SECRET;
+  });
+
+  it("removes an access_token already in the URL and sets the proof of the token it signs", () => {
+    process.env.META_APP_SECRET = TEST_APP_SECRET;
+    const url = new URL("https://graph.facebook.com/v27.0/me?access_token=other-token&fields=id");
+    expect(signGraphRequest(url, TOKEN)).toEqual({ Authorization: `Bearer ${TOKEN}` });
+    expect(url.searchParams.has("access_token")).toBe(false);
+    expect(url.searchParams.get("fields")).toBe("id");
+    expect(url.searchParams.get("appsecret_proof")).toBe(expectedProof(TOKEN));
+  });
+});
+
 describe("no app secret, no request", () => {
   afterEach(() => {
     cleanupTestToken();
@@ -205,6 +236,21 @@ describe("no app secret, no request", () => {
     const client = new MetaApiClient({ maxRetries: 0 });
     process.env.META_ACCESS_TOKEN = TOKEN;
     await expect(client.get("/me")).rejects.toThrow(/META_APP_SECRET/);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("refuses before any pacing or rate-limit state is touched", async () => {
+    process.env.META_ACCESS_TOKEN = TOKEN;
+    process.env.META_APP_SECRET = TEST_APP_SECRET;
+    const client = new MetaApiClient({ maxRetries: 0 });
+    delete process.env.META_APP_SECRET;
+    vi.stubGlobal("fetch", vi.fn(async () => mockFetchResponse({ id: "1" })));
+    const wait = vi.spyOn(RateLimiter.prototype, "waitIfNeeded");
+    const acquire = vi.spyOn(WritePacer.prototype, "acquire");
+    await expect(client.postForm("/act_123/campaigns", { name: "x" })).rejects.toThrow(/META_APP_SECRET/);
+    await expect(client.get("/act_123/insights")).rejects.toThrow(/META_APP_SECRET/);
+    expect(wait).not.toHaveBeenCalled();
+    expect(acquire).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
   });
 

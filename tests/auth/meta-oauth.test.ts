@@ -5,7 +5,7 @@ import {
   loadMetaOAuthConfig,
   oauthScopes,
 } from "../../src/auth/meta-oauth.js";
-import { mockFetchResponse } from "../setup.js";
+import { TEST_APP_SECRET, bearerTokenOf, mockFetchResponse } from "../setup.js";
 
 describe("Meta OAuth Graph API version", () => {
   const serverUrl = new URL("https://mcp.example.com");
@@ -80,10 +80,12 @@ describe("Meta OAuth scopes", () => {
 
 describe("fetchPrimaryBusiness", () => {
   beforeEach(() => {
+    vi.stubEnv("META_APP_SECRET", TEST_APP_SECRET);
     vi.spyOn(globalThis, "fetch");
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -101,7 +103,9 @@ describe("fetchPrimaryBusiness", () => {
     expect(url).toContain("/v27.0/me/businesses");
     expect(url).toContain("fields=id%2Cname");
     expect(url).toContain("limit=1");
-    expect(url).toContain("access_token=token-x");
+    expect(url).not.toContain("access_token");
+    expect(url).not.toContain("token-x");
+    expect(bearerTokenOf(vi.mocked(globalThis.fetch).mock.calls[0][1])).toBe("token-x");
   });
 
   it("returns null when the businesses list is empty", async () => {

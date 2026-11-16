@@ -58,6 +58,19 @@ function requireAppSecret(): string {
   return secret;
 }
 
+// The caller's headers, whatever their form, with the client's Authorization
+// as the only one: a caller's own, in any letter case, is dropped.
+function withAuthorization(headers: HeadersInit | undefined, auth: { Authorization: string }): Record<string, string> {
+  const entries = headers instanceof Headers
+    ? [...headers.entries()]
+    : Array.isArray(headers) ? headers : Object.entries(headers ?? {});
+  const merged: Record<string, string> = {};
+  for (const [name, value] of entries) {
+    if (name.toLowerCase() !== "authorization") merged[name] = value;
+  }
+  return { ...merged, ...auth };
+}
+
 /**
  * Signs one Graph request (fork review M1, M2): sets `appsecret_proof`, the
  * HMAC-SHA256 of the token keyed by the app secret, on `url`, removes any
@@ -378,7 +391,7 @@ export class MetaApiClient {
         const response = await fetch(reqUrl, {
           method,
           ...options,
-          headers: { ...(options?.headers as Record<string, string> | undefined), ...auth },
+          headers: withAuthorization(options?.headers, auth),
           redirect: "error",
           signal: controller.signal,
         });
