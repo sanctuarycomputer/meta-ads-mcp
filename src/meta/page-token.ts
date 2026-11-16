@@ -11,13 +11,11 @@ import { metaApiClient } from "./client.js";
  * forms (with pages_manage_ads).
  */
 export async function withPageToken<T>(pageId: string, work: () => Promise<T>, timeoutMs?: number): Promise<T> {
-  const page = await metaApiClient.get<{ access_token?: string }>(
-    `/${validateMetaId(pageId, "page")}`,
-    { fields: "access_token" },
+  // Trimmed by readPageToken, as getAccessToken trims: the value sent, signed and scrubbed is one string.
+  const token = await metaApiClient.readPageToken(
+    validateMetaId(pageId, "page"),
     timeoutMs === undefined ? undefined : { timeoutMs },
   );
-  // Trimmed, as getAccessToken trims: the value sent, signed and scrubbed is one string.
-  const token = typeof page.access_token === "string" ? page.access_token.trim() : "";
   if (!token) {
     throw new Error(`Meta returned no Page access token for page ${pageId}: the person has to manage the Page, with pages_manage_posts to edit its posts or pages_manage_ads for its lead forms.`);
   }

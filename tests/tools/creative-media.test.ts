@@ -245,7 +245,7 @@ describe("registerCreativeMediaTools", () => {
     ]);
   });
 
-  it("strips access_token and userinfo from metadata URLs but downloads the original", async () => {
+  it("strips access_token and userinfo from metadata URLs, and downloads the URL the client cleaned (M3)", async () => {
     const { handler, download } = registerWithDownload();
     const tokenUrl = "https://cdn.example.com/full.jpg?access_token=SECRETTOKEN123&oh=keepme";
     vi.stubGlobal("fetch", vi.fn()
@@ -263,7 +263,9 @@ describe("registerCreativeMediaTools", () => {
 
     const result = await handler({ creative_id: "40123" }) as ToolResult;
 
-    expect(download).toHaveBeenCalledWith(tokenUrl, expect.anything());
+    // The client removed the token from Meta's answer before the tool saw it (spec check 1).
+    expect(download).toHaveBeenCalledWith("https://cdn.example.com/full.jpg?oh=keepme", expect.anything());
+    for (const [url] of download.mock.calls) expect(new URL(String(url)).searchParams.has("access_token")).toBe(false);
     const serialized = JSON.stringify(resultJson(result));
     expect(serialized).not.toContain("SECRETTOKEN123");
     expect(serialized).not.toContain("user:pass@");

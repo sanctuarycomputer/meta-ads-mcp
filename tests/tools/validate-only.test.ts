@@ -222,8 +222,9 @@ describe("Meta's answer is scrubbed before it is text", () => {
   const foreign = ["foreign", "credential", "value", String(process.pid)].join("-");
 
   it.each([
-    ["at the top", { success: true, access_token: foreign }, '{"success":true,"access_token":"[REDACTED]"}'],
-    ["nested", { success: true, data: { pages: [{ id: "1", access_token: foreign }] } }, '{"success":true,"data":{"pages":[{"id":"1","access_token":"[REDACTED]"}]}}'],
+    // An access_token key is removed from every answer by the client (spec check 1, M3), not redacted.
+    ["at the top", { success: true, access_token: foreign }, '{"success":true}'],
+    ["nested", { success: true, data: { pages: [{ id: "1", access_token: foreign }] } }, '{"success":true,"data":{"pages":[{"id":"1"}]}}'],
     // A credential-named field holding an object: only the scrub by key, on the parsed answer, removes it.
     ["as an object", { success: true, client_secret: { value: foreign } }, '{"success":true,"client_secret":"[REDACTED]"}'],
   ])("the answer line, a credential %s", async (_where, answer, line) => {

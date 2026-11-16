@@ -13,7 +13,7 @@ import {
 import type { MetaApiError, MetaApiResponse } from "./types/common.js";
 import { collectAllPages } from "./paginator.js";
 import { assertMetaApiVersion, resolveMetaApiVersion } from "./api-version.js";
-import { isCredentialName, scrubCredentialsDeep, scrubErrorCredentials } from "../utils/scrub-credentials.js";
+import { cleanAnswer, isCredentialName, scrubCredentialsDeep, scrubErrorCredentials } from "../utils/scrub-credentials.js";
 import { ENDPOINTS, VIDEO_HOST, WriteRefusal, hostAllowed, matchEndpoint, type GraphGet } from "./write-descriptor.js";
 import { RealWriteGate, callContext, type CallContext, type WriteGate } from "./write-guard.js";
 
@@ -53,6 +53,28 @@ const READ_POST = new RegExp(ENDPOINTS.read_post);
 
 const isReadServer = (): boolean => process.env.META_ADS_READ_ONLY === "1";
 
+/** Edges Graph answers with access tokens by default: a user's `accounts` are their Pages, each with its token. */
+export const TOKEN_EDGES = ["accounts"] as const;
+const REFUSED_FIELD_NAMES: ReadonlySet<string> = new Set(["access_token", ...TOKEN_EDGES]);
+
+/**
+ * The names a `fields` value asks for, at any expansion depth: percent-decoded until stable (each `%XX` of an ASCII
+ * byte, so a stray `%` cannot stop it), then every maximal run of `[A-Za-z0-9_]`, lower-cased.
+ */
+export function fieldNames(value: string): string[] {
+  let text = value;
+  for (;;) {
+    const next = text.replace(/%([0-7][0-9A-Fa-f])/g, (_m, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+    if (next === text) break;
+    text = next;
+  }
+  return (text.match(/[A-Za-z0-9_]+/g) ?? []).map((name) => name.toLowerCase());
+}
+
+// A fields value as Graph reads it: a string as it is, an array joined (buildFieldsParam), anything else as sent.
+const fieldsText = (value: unknown): string =>
+  Array.isArray(value) ? value.map(String).join(",") : typeof value === "string" ? value : JSON.stringify(value) ?? String(value);
+
 /**
  * Refuses, with `WriteRefusal`, a request the client never sends on either server (contract §2): a method
  * override or a Graph batch parameter (its name before the first `[`, in any case: `method[0]`, `batch[0][method]`), a repeated multipart name, an `async_batch_requests` segment, a
@@ -61,6 +83,8 @@ const isReadServer = (): boolean => process.env.META_ADS_READ_ONLY === "1";
  * what the URL is built from), or whose host takes only other requests (`hostAllowed`, contract 1.1 §2: the video
  * host takes only `POST /act_{id}/advideos`); a field named `__proto__`, `constructor` or `prototype`; and on the read
  * server (`META_ADS_READ_ONLY=1`) any method but GET, except an insights report POST (`ENDPOINTS.read_post`).
+ * And a param named `fields` or `fields[…]` (any case) that asks for `access_token` or a token-bearing edge
+ * (`TOKEN_EDGES`), at any depth (spec check 1); `readPageToken`'s one request alone is exempt.
  * Nothing it says quotes the path or a value.
  */
 export function checkRequestShape(
@@ -69,6 +93,7 @@ export function checkRequestShape(
   joined: string,
   params: Readonly<Record<string, unknown>>,
   multipartNames?: readonly string[],
+  opts?: { allowTokenField?: true },
 ): void {
   for (const key of [...Object.keys(params), ...(multipartNames ?? [])]) {
     assertFieldName(key);
@@ -76,6 +101,12 @@ export function checkRequestShape(
     const k = key.split("[")[0].toLowerCase();
     if (OVERRIDE_NAMES.has(k)) throw new WriteRefusal(`a parameter named ${key} would override the HTTP method`);
     if (BATCH_NAMES.has(k)) throw new WriteRefusal(`a parameter named ${key} is a Graph batch`);
+  }
+  for (const [key, value] of Object.entries(params)) {
+    if (key.split("[")[0].toLowerCase() !== "fields" || opts?.allowTokenField) continue;
+    if (fieldNames(fieldsText(value)).some((name) => REFUSED_FIELD_NAMES.has(name))) {
+      throw new WriteRefusal(`the ${key.slice(0, 40)} parameter asks for an access token or a token-bearing edge (${TOKEN_EDGES.join(", ")})`);
+    }
   }
   if (multipartNames) {
     const seen = new Set<string>();
@@ -575,7 +606,20 @@ export class MetaApiClient {
     const response = await fetch(url.toString(), { method: "GET", signal, redirect: "error", headers: auth });
     const body = (await response.json()) as unknown;
     if (!response.ok || isMetaApiError(body)) return undefined;
-    return body as T;
+    return cleanAnswer(body) as T;
+  }
+
+  /**
+   * The one read of a Page token (spec check 1): `GET /{page}` with the constant `fields=access_token`, the only
+   * request exempt from the fields refusal and the only answer not cleaned. Returns the token trimmed, or "" when
+   * Meta answered without one. Only `withPageToken` calls it (a static test asserts it).
+   */
+  async readPageToken(pageId: string, scope?: RequestScope): Promise<string> {
+    const path = `/${pageId}`;
+    const params = { fields: "access_token" };
+    const url = this.buildUrl("GET", path, params);
+    const page = await this.execute<{ access_token?: unknown }>("GET", url, path, params, undefined, scope, undefined, true);
+    return typeof page?.access_token === "string" ? page.access_token.trim() : "";
   }
 
   /** The whole process's state, every tenant's: for tests and the logs. */
@@ -748,11 +792,13 @@ export class MetaApiClient {
     options?: RequestInit,
     scope?: RequestScope,
     wire?: Wire,
+    tokenRead?: true,
   ): Promise<T> {
     const ctx = callContext.getStore();
     const multipartNames = options?.body instanceof FormData ? [...options.body.keys()] : undefined;
     try {
-      checkRequestShape(method, this.baseFor(method, this.joined(path)), this.joined(path), params, multipartNames);
+      const shape = tokenRead ? { allowTokenField: true as const } : undefined;
+      checkRequestShape(method, this.baseFor(method, this.joined(path)), this.joined(path), params, multipartNames, shape);
     } catch (e) {
       throw noted(ctx, e);
     }
@@ -916,7 +962,8 @@ export class MetaApiClient {
           throw lastError;
         }
 
-        return body as T;
+        // Every answer is cleaned before any caller sees it (spec check 1), but the Page token's one read.
+        return (tokenRead ? body : cleanAnswer(body)) as T;
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") {
           lastError = new Error(`Request timeout after ${timeout}ms`);

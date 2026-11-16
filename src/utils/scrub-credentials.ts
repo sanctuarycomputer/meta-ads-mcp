@@ -138,20 +138,29 @@ const padded = (base64: string) => base64.padEnd(Math.ceil(base64.length / 4) * 
  * Longest first, so a form that contains another is removed whole.
  */
 export function secretForms(secret: string, opts: { token: boolean }): string[] {
-  // A deep scrub asks once per string: the forms (a proof is an HMAC) are
-  // kept per secret, app secret and kind, a few at a time.
   const appSecret = opts.token ? process.env.META_APP_SECRET?.trim() : undefined;
-  const key = JSON.stringify([secret, appSecret ?? null]);
-  const known = formsCache.get(key);
-  if (known) return [...known];
-  const forms = computeForms(secret, appSecret);
-  if (formsCache.size >= MAX_CACHED_SECRETS) formsCache.clear();
-  formsCache.set(key, forms);
-  return [...forms];
+  return computeForms(secret, appSecret);
 }
 
+/**
+ * A deep scrub asks for the forms once per string, and a proof is an HMAC, so they are kept. The env secrets' forms
+ * are kept here, a few at a time; a held Page token's are kept on the store that holds it (heldForms), so they go
+ * when the call that held the token ends.
+ */
 const formsCache = new Map<string, string[]>();
 const MAX_CACHED_SECRETS = 32;
+const heldForms = new WeakMap<Set<string>, Map<string, string[]>>();
+
+function keptForms(cache: Map<string, string[]>, secret: string, opts: { token: boolean }): string[] {
+  const appSecret = opts.token ? process.env.META_APP_SECRET?.trim() : undefined;
+  const key = JSON.stringify([secret, appSecret ?? null]);
+  const known = cache.get(key);
+  if (known) return known;
+  const forms = computeForms(secret, appSecret);
+  if (cache.size >= MAX_CACHED_SECRETS) cache.clear();
+  cache.set(key, forms);
+  return forms;
+}
 
 function computeForms(secret: string, appSecret: string | undefined): string[] {
   const value = secret.trim();
@@ -181,21 +190,31 @@ function computeForms(secret: string, appSecret: string | undefined): string[] {
   return [...new Set(forms)].filter((form) => form.length >= MIN_SECRET_LENGTH).sort((a, b) => b.length - a.length);
 }
 
+/** TEST-ONLY. Whether the module-level cache keeps forms of `secret` (it keeps only the env secrets'). */
+export function formsCachedForTests(secret: string): boolean {
+  return [...formsCache.keys()].some((key) => (JSON.parse(key) as [string])[0] === secret);
+}
+
 /** Every form of the process's own secrets, longest first. */
 export function envSecrets(): string[] {
   const found: string[] = [];
   // Each name is read literally, so a static sweep sees every env name read.
   const token = process.env.META_ACCESS_TOKEN;
-  if (token !== undefined) found.push(...secretForms(token, { token: true }));
+  if (token !== undefined) found.push(...keptForms(formsCache, token, { token: true }));
   const appSecret = process.env.META_APP_SECRET;
-  if (appSecret !== undefined) found.push(...secretForms(appSecret, { token: false }));
+  if (appSecret !== undefined) found.push(...keptForms(formsCache, appSecret, { token: false }));
   return [...new Set(found)].sort((a, b) => b.length - a.length);
 }
 
 /** Every form of every secret a scrub removes by value: the env's and the held Page tokens'. */
 function allSecretForms(): string[] {
   const found = envSecrets();
-  for (const held of heldSecrets.getStore() ?? []) found.push(...secretForms(held, { token: true }));
+  const store = heldSecrets.getStore();
+  if (store) {
+    let cache = heldForms.get(store);
+    if (!cache) heldForms.set(store, (cache = new Map()));
+    for (const held of store) found.push(...keptForms(cache, held, { token: true }));
+  }
   return [...new Set(found)].sort((a, b) => b.length - a.length);
 }
 
@@ -277,18 +296,36 @@ export function hasCredential(text: string): boolean {
 export function scrubCredentialsDeep<T>(value: T, secret?: string, opts: ScrubOptions = {}): T {
   const cleanString = (text: string) =>
     scrubCredentials(secret && secret.length >= 8 ? text.split(secret).join(REDACTED) : text, opts);
-  const isPlain = (item: unknown): item is Record<string, unknown> | unknown[] => {
-    if (Array.isArray(item)) return true;
-    if (item === null || typeof item !== "object") return false;
-    const proto = Object.getPrototypeOf(item);
-    return proto === Object.prototype || proto === null;
-  };
+  return copyDeep(value, cleanString, (key, item, inArray) =>
+    !inArray && isCredentialName(key) && item !== undefined && item !== null && item !== "" ? { value: REDACTED } : undefined);
+}
+
+type Plain = Record<string, unknown> | unknown[];
+
+function isPlain(item: unknown): item is Plain {
+  if (Array.isArray(item)) return true;
+  if (item === null || typeof item !== "object") return false;
+  const proto = Object.getPrototypeOf(item);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * A copy of a parsed JSON value at any depth. `entry` rules on each own entry first: `"drop"` leaves it out, a
+ * `{ value }` sets it; otherwise a string goes through `cleanString`, a plain object or array is copied, and
+ * anything else is kept as it is. It walks with its own stack and keeps each copy, so a cycle stays a cycle and no
+ * depth overflows the call stack.
+ */
+function copyDeep<T>(
+  value: T,
+  cleanString: (text: string) => string,
+  entry: (key: string, item: unknown, inArray: boolean) => { value: unknown } | "drop" | undefined,
+): T {
   if (typeof value === "string") return cleanString(value) as T;
   if (!isPlain(value)) return value;
 
-  const copies = new Map<object, Record<string, unknown> | unknown[]>();
-  const pending: Array<[Record<string, unknown> | unknown[], Record<string, unknown> | unknown[]]> = [];
-  const copyOf = (source: Record<string, unknown> | unknown[]) => {
+  const copies = new Map<object, Plain>();
+  const pending: Array<[Plain, Plain]> = [];
+  const copyOf = (source: Plain) => {
     const copy = Array.isArray(source) ? [] : {};
     copies.set(source, copy);
     pending.push([source, copy]);
@@ -298,8 +335,10 @@ export function scrubCredentialsDeep<T>(value: T, secret?: string, opts: ScrubOp
   while (pending.length > 0) {
     const [source, target] = pending.pop()!;
     for (const [key, item] of Object.entries(source)) {
+      const ruled = entry(key, item, Array.isArray(source));
+      if (ruled === "drop") continue;
       let cleaned: unknown;
-      if (!Array.isArray(source) && isCredentialName(key) && item !== undefined && item !== null && item !== "") cleaned = REDACTED;
+      if (ruled) cleaned = ruled.value;
       else if (typeof item === "string") cleaned = cleanString(item);
       else if (isPlain(item)) cleaned = copies.get(item) ?? copyOf(item);
       else cleaned = item;
@@ -308,6 +347,65 @@ export function scrubCredentialsDeep<T>(value: T, secret?: string, opts: ScrubOp
     }
   }
   return root as T;
+}
+
+// The URL parameters an answer loses: what carries or proves a token.
+const ANSWER_URL_NAMES: ReadonlySet<string> = new Set(["access_token", "appsecret_proof"].map(normalizeName));
+
+// A query or fragment, with its mark, without the token-carrying parameters, each kept piece byte for byte; the mark
+// goes too when nothing is left of parameters that were there.
+function withMark(mark: "?" | "#", params: string): string {
+  const kept = params.split("&").filter((piece) => !ANSWER_URL_NAMES.has(normalizeName(piece.split("=")[0]))).join("&");
+  return kept === "" && params !== "" ? "" : `${mark}${kept}`;
+}
+
+/**
+ * A string that parses as an http(s) URL, without its query and fragment parameters named `access_token` or
+ * `appsecret_proof` (any spelling `isCredentialName` folds): the rest of the text byte for byte. A `?` or `#` left
+ * with nothing after it goes too. Any other string (prose with a URL in it too) is returned as it is.
+ */
+function urlWithoutToken(text: string): string {
+  // A URL holds no whitespace: prose that starts with one is text, kept as it is.
+  if (!/^\s*https?:\S*\s*$/i.test(text)) return text;
+  try {
+    const url = new URL(text);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return text;
+  } catch {
+    return text;
+  }
+  const hashAt = text.indexOf("#");
+  const queryAt = text.indexOf("?");
+  const hasQuery = queryAt !== -1 && (hashAt === -1 || queryAt < hashAt);
+  const head = text.slice(0, hasQuery ? queryAt : hashAt === -1 ? text.length : hashAt);
+  let out = head;
+  if (hasQuery) out += withMark("?", text.slice(queryAt + 1, hashAt === -1 ? text.length : hashAt));
+  if (hashAt !== -1) {
+    // A path-shaped fragment (#/route?a=b) has its parameters after its first ?.
+    const fragment = text.slice(hashAt + 1);
+    const inner = fragment.indexOf("?");
+    out += inner === -1
+      ? withMark("#", fragment)
+      : `#${fragment.slice(0, inner)}${withMark("?", fragment.slice(inner + 1))}`;
+  }
+  return out;
+}
+
+/**
+ * A successful Meta answer as a tool may see it (spec check 1), on a copy, and nothing more: every key named
+ * `access_token` (any case, any depth) removed; in every string that parses as an http(s) URL, the query and
+ * fragment parameters named `access_token` or `appsecret_proof` removed, the rest kept byte for byte; and every
+ * secret a scrub removes by value (the env's and the call's held Page tokens, in each of their forms) redacted. No
+ * name=value or credential-key scrub and no `EAA` pattern: an answer's advertiser text (a `link_url` or `url_tags`
+ * with `token=`, a cursor) comes back as it was, since some answers are posted back onto live ads.
+ */
+export function cleanAnswer<T>(value: T): T {
+  const forms = allSecretForms();
+  const cleanString = (text: string) => {
+    let out = urlWithoutToken(text);
+    for (const form of forms) out = out.split(form).join(REDACTED);
+    return out;
+  };
+  return copyDeep(value, cleanString, (key, _item, inArray) => (!inArray && key.toLowerCase() === "access_token" ? "drop" : undefined));
 }
 
 // An error is cleaned of Meta-shaped tokens the call does not hold, too.

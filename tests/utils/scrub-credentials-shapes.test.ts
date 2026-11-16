@@ -1,6 +1,9 @@
 import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import {
+  envSecrets,
+  formsCachedForTests,
   heldSecrets,
   scrubCredentials,
   scrubCredentialsDeep,
@@ -134,6 +137,53 @@ describe("scrub shapes (spec check 5)", () => {
       });
     });
     expect(scrubCredentials(`left ${PAGE}`)).toBe(`left ${PAGE}`);
+  });
+});
+
+describe("review T6: the env app secret, the held forms' cache", () => {
+  beforeEach(() => {
+    process.env.META_ACCESS_TOKEN = `  ${ACCESS}\n`;
+    process.env.META_APP_SECRET = ` ${APP_SECRET}\t`;
+  });
+  afterEach(restoreEnv);
+
+  it("gives the env app secret no proof through envSecrets and the scrub (T6-2)", () => {
+    expect(envSecrets()).toContain(proofOf(ACCESS));
+    expect(envSecrets()).not.toContain(proofOf(APP_SECRET));
+    expect(scrubCredentials(`p ${proofOf(APP_SECRET)} q`)).toBe(`p ${proofOf(APP_SECRET)} q`);
+  });
+
+  it("keeps a held Page token's forms only while it is held, never in the module cache (T6-3)", async () => {
+    await withHeldSecret(PAGE, async () => {
+      expect(scrubCredentials(`a ${b64(PAGE)} b`)).toBe("a [REDACTED] b");
+      expect(formsCachedForTests(PAGE)).toBe(false);
+    });
+    expect(formsCachedForTests(PAGE)).toBe(false);
+    // The module cache is the env secrets': the hook sees what it keeps.
+    expect(formsCachedForTests(process.env.META_ACCESS_TOKEN as string)).toBe(true);
+  });
+
+  it("keeps no Page token's forms in the module cache after withPageToken returns (T6-3)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockFetchResponse({ id: "6001", access_token: PAGE })));
+    const result = await withPageToken("6001", async () => ({ note: `echo ${PAGE}` }));
+    vi.unstubAllGlobals();
+    expect(result.note).toBe("echo [REDACTED]");
+    expect(formsCachedForTests(PAGE)).toBe(false);
+  });
+});
+
+describe("scrubErrorCredentials's opt-in sites each remove a foreign token (T6-1)", () => {
+  it("a thrown value that is not an Error or a string", () => {
+    const thrown = { toString: () => `socket said ${FOREIGN}` };
+    const error = scrubErrorCredentials(thrown as unknown) as Error;
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toBe("socket said [REDACTED]");
+  });
+
+  it("an McpError's data", () => {
+    const error = scrubErrorCredentials(new McpError(-32600, "refused", { detail: `Meta said ${FOREIGN}` }));
+    expect(error).toBeInstanceOf(McpError);
+    expect(error.data).toEqual({ detail: "Meta said [REDACTED]" });
   });
 });
 
