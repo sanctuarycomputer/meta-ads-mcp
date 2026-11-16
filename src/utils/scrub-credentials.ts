@@ -114,7 +114,8 @@ export function envSecrets(): string[] {
   for (const name of ENV_SECRET_NAMES) {
     const raw = process.env[name];
     if (raw === undefined) continue;
-    for (const value of new Set([raw, raw.trim()])) {
+    // Raw, trimmed, and percent-encoded (an app token carries a "|").
+    for (const value of new Set([raw, raw.trim(), encodeURIComponent(raw.trim())])) {
       if (value.length >= MIN_SECRET_LENGTH) found.push(value);
     }
   }

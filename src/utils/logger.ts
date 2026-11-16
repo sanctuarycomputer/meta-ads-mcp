@@ -1,12 +1,17 @@
 import pino from "pino";
-import { isCredentialName, scrubCredentials, scrubCredentialsDeep } from "./scrub-credentials.js";
+import {
+  envSecrets,
+  isCredentialName,
+  scrubCredentials,
+  scrubCredentialsDeep,
+} from "./scrub-credentials.js";
 
 /**
  * Field-name redaction, before serialization. The line-level scrub in
  * scrubLogLine is what keeps a secret out of the output wherever it sits; these
  * paths also catch a short credential that is not the process's own secret.
  */
-const redact = {
+export const LOG_REDACT = {
   paths: [
     "apify_token",
     "*.apify_token",
@@ -51,7 +56,13 @@ const QUOTED_PAIR = /"([A-Za-z0-9_%.-]{1,64})=([^&#;,\s"'<>]*)/g;
  */
 export function scrubLogLine(line: string): string {
   try {
-    return `${JSON.stringify(scrubCredentialsDeep(JSON.parse(line) as unknown))}\n`;
+    let out = JSON.stringify(scrubCredentialsDeep(JSON.parse(line) as unknown));
+    // The deep scrub cleans values and credential-named keys, not a key's
+    // own text: remove each env secret, as JSON spells it, from the line.
+    for (const secret of envSecrets()) {
+      out = out.split(JSON.stringify(secret).slice(1, -1)).join("[REDACTED]");
+    }
+    return `${out}\n`;
   } catch {
     return scrubCredentials(line).replace(QUOTED_PAIR, (match, name: string, value: string) =>
       value.length > 0 && isCredentialName(name) ? `"${name}=[REDACTED]` : match,
@@ -70,7 +81,7 @@ export function createLogger(
     {
       level: "info",
       serializers: { err: pino.stdSerializers.err, error: pino.stdSerializers.err },
-      redact,
+      redact: LOG_REDACT,
       hooks: { streamWrite: scrubLogLine },
     },
     destination,

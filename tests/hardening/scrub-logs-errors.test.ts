@@ -4,8 +4,9 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { spawnSync } from "node:child_process";
+import pino from "pino";
 import { fileURLToPath } from "node:url";
-import { createLogger, scrubLogLine } from "../../src/utils/logger.js";
+import { createLogger, scrubLogLine, LOG_REDACT } from "../../src/utils/logger.js";
 import {
   scrubCredentials,
   scrubCredentialsDeep,
@@ -102,6 +103,35 @@ describe("scrub covers logs and errors (done-when 3)", () => {
     const line = scrubLogLine(`not json "access_token=${PAGE} ${SECRET}`);
     expect(line).not.toContain(PAGE);
     expect(line).not.toContain(SECRET);
+  });
+
+  it("an env secret used as an object key is removed", () => {
+    const { log, out } = capture();
+    log.info({ [TOKEN]: 1, m: { [SECRET]: "v" } });
+    expect(out()).not.toContain(TOKEN);
+    expect(out()).not.toContain(SECRET);
+  });
+
+  it("a credential pair after a newline in the message is removed (JSON path)", () => {
+    const { log, out } = capture();
+    log.info(`line one\naccess_token=${PAGE}`);
+    expect(out()).not.toContain(PAGE);
+  });
+
+  it("a percent-encoded env secret is removed", () => {
+    const appToken = `${TOKEN}|tail`;
+    process.env.META_ACCESS_TOKEN = appToken;
+    const text = `x ${encodeURIComponent(appToken)} y`;
+    expect(scrubCredentials(text)).toBe("x [REDACTED] y");
+  });
+
+  it("the redact paths alone censor the added credential fields", () => {
+    const lines: string[] = [];
+    // The redact config without the line scrub, so only the paths decide it.
+    const log = pino({ redact: LOG_REDACT }, { write: (s: string) => void lines.push(s) });
+    const [p, s, c] = ["p", "s", "c"].map((ch) => ch.repeat(20));
+    log.info({ appsecret_proof: p, app_secret: s, client_secret: c, n: { appsecret_proof: p } });
+    expect(lines.join("")).not.toMatch(/p{20}|s{20}|c{20}/);
   });
 
   it("added redact paths", () => {
