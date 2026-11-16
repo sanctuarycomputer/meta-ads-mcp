@@ -121,6 +121,15 @@ describe("266: campaign spend cap", () => {
       expect(text(result)).toContain("spend_cap=100000");
     });
 
+    it("accepts a lower-case currency and names it upper-case", async () => {
+      stubMeta(undefined, { id: "act_123", currency: "usd" });
+      const result = await update({ campaign_id: "1001", spend_cap: 1000 });
+      expect(postBody().get("spend_cap")).toBe("100000");
+      expect(text(result)).toContain("Spend cap: USD 1,000.00");
+      stubMeta(undefined, { id: "act_123", currency: "cop" });
+      await expect(update({ campaign_id: "1001", spend_cap: 1000.5 })).rejects.toThrow(/than COP allows/);
+    });
+
     it("converts a whole-unit currency", async () => {
       stubMeta(undefined, { id: "act_123", currency: "COP" });
       await update({ campaign_id: "1001", spend_cap: 500000 });
@@ -178,6 +187,8 @@ describe("266: campaign spend cap", () => {
       ["a failed read", new Error("Unsupported get request")],
       ["no account_id", {}],
       ["an account_id that is not digits", { account_id: "act_1" }],
+      ["an account_id with trailing junk", { account_id: "123x" }],
+      ["an account_id that is a number, not a string", { account_id: 123 }],
     ])("refuses when the campaign read gives %s", async (_label, campaign) => {
       stubMeta(campaign);
       await expect(update({ campaign_id: "1001", spend_cap: 1000 })).rejects.toThrow(
@@ -237,6 +248,13 @@ describe("266: campaign spend cap", () => {
       stubMeta();
       await expect(create(922337203685478)).rejects.toThrow(/remove_spend_cap/);
       expect(posts()).toEqual([]);
+    });
+
+    it("its schema refuses the removal value too", () => {
+      const schema = z.object(tool("ads_create_campaign").schema as z.ZodRawShape);
+      const args = { account_id: "act_123", name: "sb-c", objective: "OUTCOME_SALES" };
+      expect(schema.safeParse({ ...args, spend_cap: 922337203685477 }).success).toBe(true);
+      expect(schema.safeParse({ ...args, spend_cap: 922337203685478 }).success).toBe(false);
     });
 
     it("still sends a spend_cap just under the removal value", async () => {
