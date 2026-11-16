@@ -113,6 +113,7 @@ export interface OutcomeRecord {
 export class WriteRefusal extends McpError {
   constructor(detail: string) {
     super(ErrorCode.InvalidRequest, `write refused: ${detail}`);
+    // .message is McpError's "MCP error -32600: write refused: <detail>"; the runner's tests (Task 3) rely on the prefix.
     this.name = "WriteRefusal";
   }
 }
@@ -616,12 +617,17 @@ const isObj = (x: unknown): x is Record<string, unknown> => x !== null && typeof
 const holdsObject = (x: unknown): boolean => isObj(x) || (Array.isArray(x) && x.some(holdsObject));
 
 // The leaf paths of a bounded object's value, relative to it: keys joined by dots, array indices dropped. A
-// non-object inside an array of objects is a leaf at the array's own path, so it cannot pass unseen.
+// non-object inside an array of objects is a leaf at the array's own path, so it cannot pass unseen; directly
+// inside the bounded key's own array that path is "" (no sub_keys entry), which paramsKeys drops and
+// admittedCreativeSpec refuses.
 function leafPaths(value: unknown, prefix: string, out: string[]): void {
   if (isObj(value)) {
     for (const [k, v] of Object.entries(value)) leafPaths(v, prefix ? `${prefix}.${k}` : k, out);
   } else if (Array.isArray(value) && value.some(holdsObject)) {
-    for (const e of value) leafPaths(e, prefix, out);
+    for (const e of value) {
+      if (!prefix && !holdsObject(e)) out.push("");
+      else leafPaths(e, prefix, out);
+    }
   } else if (prefix) {
     out.push(prefix);
   }
@@ -636,7 +642,7 @@ function levelKeys(params: Readonly<Record<string, unknown>>, at: string, out: s
     if (!SUB_KEYS.has(key)) continue;
     const paths: string[] = [];
     leafPaths(value, "", paths);
-    for (const p of paths) out.push(`${at}${key}.${p}`);
+    for (const p of paths) if (p) out.push(`${at}${key}.${p}`);
   }
 }
 
@@ -702,7 +708,8 @@ export function admittedCreativeSpec(spec: Record<string, unknown>): boolean {
     if (!isObj(value) && !(Array.isArray(value) && value.some(holdsObject))) return false;
     const paths: string[] = [];
     leafPaths(value, "", paths);
-    if (!paths.every((p) => allowed.includes(p))) return false;
+    // An empty bounded object has no path: in a request it goes to rule 8, so it is not admitted here either.
+    if (paths.length === 0 || !paths.every((p) => allowed.includes(p))) return false;
   }
   return true;
 }
@@ -717,7 +724,7 @@ export function minorAmount(v: unknown): number | null {
   else if (typeof v === "string" && /^\d{1,16}$/.test(v)) n = Number(v);
   else return null;
   if (!Number.isSafeInteger(n) || n < 0 || n === SPEND_CAP_REMOVAL) return null;
-  return n;
+  return n + 0; // -0 → 0
 }
 
 // Graph `metadata.type` names for each object type. Meta's live names are unconfirmed (258): a wrong guess is

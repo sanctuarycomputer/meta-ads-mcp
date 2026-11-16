@@ -94,6 +94,7 @@ describe("matchEndpoint, deriveKind, deriveAccountLimit, deriveCreativeBearing",
     expect(deriveAccountLimit(adsets, d(["funding_source"]))).toBe(true);
     expect(deriveAccountLimit(adsets, d(["spend_cap_action"]))).toBe(true);
     expect(deriveAccountLimit(null, d([], "other", "/act_1/nosuchedge"))).toBe(true);
+    expect(deriveAccountLimit(null, d([], "other", "/v23.0/act_1/nosuchedge"))).toBe(true);
     expect(deriveAccountLimit(null, d([], "other", "/1/nosuchedge"))).toBe(false);
     expect(deriveAccountLimit(null, d([], "account", "/1/nosuchedge"))).toBe(true);
   });
@@ -150,6 +151,17 @@ describe("paramsKeys", () => {
     ]);
   });
 
+  it("an array of arrays of objects is walked through (indices dropped at every depth)", () => {
+    expect(paramsKeys({ asset_feed_spec: { images: [[[{ hash: "h" }]]] } })).toEqual([
+      "asset_feed_spec",
+      "asset_feed_spec.images.hash",
+    ]);
+  });
+
+  it("a non-object directly in a bounded key's own array adds no path (Task 4 rule 11 must refuse it)", () => {
+    expect(paramsKeys({ objectives: [{ name: "a" }, 3] })).toEqual(["objectives", "objectives.name"]);
+  });
+
   it("a JSON string is a leaf; a creative string has no creative.<k>", () => {
     expect(paramsKeys({ object_story_spec: '{"page_id":"1"}', creative: '{"creative_id":"1"}' })).toEqual([
       "object_story_spec",
@@ -183,6 +195,16 @@ describe("admittedCreativeSpec", () => {
     ).toBe(false);
   });
 
+  it("admits instagram_actor_id, id and account_id", () => {
+    expect(admittedCreativeSpec({ ...ok, instagram_actor_id: "9992000000000002" })).toBe(true);
+  });
+
+  it("is false for an empty bounded object, and for a non-object directly in a bounded array", () => {
+    expect(admittedCreativeSpec({ ...ok, object_story_spec: {} })).toBe(false);
+    expect(admittedCreativeSpec({ ...ok, asset_feed_spec: [{ images: [{ hash: "h" }] }] })).toBe(true);
+    expect(admittedCreativeSpec({ ...ok, asset_feed_spec: [{ images: [{ hash: "h" }] }, "x"] })).toBe(false);
+  });
+
   it("is false for creative_id and for an unparsed bounded object", () => {
     expect(admittedCreativeSpec({ ...ok, creative_id: "1" })).toBe(false);
     expect(admittedCreativeSpec({ ...ok, object_story_spec: '{"page_id":"1"}' })).toBe(false);
@@ -192,6 +214,41 @@ describe("admittedCreativeSpec", () => {
 
 describe("CREATIVE_READ_FIELDS", () => {
   const fields = CREATIVE_READ_FIELDS.split(",");
+  it("is exactly ruling R1's 30 fields", () => {
+    expect(fields).toEqual([
+      "name",
+      "object_story_spec",
+      "object_story_id",
+      "source_instagram_media_id",
+      "instagram_user_id",
+      "asset_feed_spec",
+      "url_tags",
+      "degrees_of_freedom_spec",
+      "contextual_multi_ads",
+      "object_id",
+      "call_to_action",
+      "image_crops",
+      "interactive_components_spec",
+      "portrait_customizations",
+      "categorization_criteria",
+      "link_url",
+      "platform_customizations",
+      "adlabels",
+      "effective_object_story_id",
+      "actor_id",
+      "instagram_actor_id",
+      "branded_content",
+      "facebook_branded_content",
+      "instagram_branded_content",
+      "product_set_id",
+      "template_url_spec",
+      "applink_treatment",
+      "creative_sourcing_spec",
+      "destination_spec",
+      "wamo_whatsapp_identity_spec",
+    ]);
+  });
+
   it("excludes creative_id and includes each contract §5 left-out key", () => {
     expect(fields).not.toContain("creative_id");
     for (const k of [
@@ -222,6 +279,7 @@ describe("minorAmount", () => {
     [1000, 1000],
     ["1000", 1000],
     [0, 0],
+    [-0, 0],
     [-1, null],
     [1.5, null],
     ["1e3", null],
@@ -293,6 +351,17 @@ describe("validateDescriptor", () => {
     expect(validateDescriptor(d)).toEqual(fake.validateDescriptor(d));
     expect(validateDescriptor(d)).toContain("identity[0].owner_ig must be null for object_story_spec.page_id");
   });
+
+  it("refuses a resolved creative_id entry and duplicate params_keys, as the fake does", () => {
+    const base = byName("ig-ok__creative_id").descriptor as Record<string, unknown>;
+    const cid = structuredClone(base) as { identity: Record<string, unknown>[] };
+    cid.identity.push({ field: "creative_id", via: "creative_id", id: "1", owner_page: "2", owner_ig: null });
+    expect(validateDescriptor(cid)).toEqual(["identity[2].owner_page must be null for creative_id"]);
+    expect(validateDescriptor(cid)).toEqual(fake.validateDescriptor(cid));
+    const dup = { ...structuredClone(base), params_keys: ["name", "name"] };
+    expect(validateDescriptor(dup)).toEqual(['descriptor.params_keys is invalid: ["name","name"]']);
+    expect(validateDescriptor(dup)).toEqual(fake.validateDescriptor(dup));
+  });
 });
 
 describe("tables", () => {
@@ -359,6 +428,7 @@ describe("WriteRefusal", () => {
     const e = new WriteRefusal("no reason");
     expect(e).toBeInstanceOf(McpError);
     expect(e.code).toBe(ErrorCode.InvalidRequest);
-    expect(e.message).toContain("write refused: no reason");
+    expect(e.message).toBe(`MCP error ${ErrorCode.InvalidRequest}: write refused: no reason`);
+    expect(e.name).toBe("WriteRefusal");
   });
 });
