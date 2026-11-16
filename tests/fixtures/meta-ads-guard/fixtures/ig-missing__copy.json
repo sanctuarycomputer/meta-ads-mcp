@@ -1,0 +1,80 @@
+{
+  "name": "ig-missing__copy",
+  "covers": [
+    "ig-missing:copy"
+  ],
+  "decided_by": "rule 1",
+  "why": "the copied ad's creative has no Instagram identity",
+  "for": "both",
+  "brand_status": {
+    "arrangements": "ready"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000047",
+    "tool": "ads_duplicate_ad",
+    "method": "POST",
+    "path": "/9996000000000047/copies",
+    "params_keys": [
+      "adset_id",
+      "status_option"
+    ],
+    "ad_account": "act_9990000000000002",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "ad",
+      "id": "9996000000000047",
+      "created": false
+    },
+    "status": {
+      "before": "PAUSED",
+      "after": "PAUSED"
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [
+      {
+        "id": "9994000000000470",
+        "account_id": "act_9990000000000002",
+        "created": false,
+        "role": "destination",
+        "spend_cap_minor_before": 100000,
+        "spend_cap_minor_after": 100000,
+        "name": "sb-arr-h1",
+        "status_after": "PAUSED",
+        "buying_type": "AUCTION"
+      }
+    ],
+    "identity": [
+      {
+        "field": "object_story_spec.page_id",
+        "via": "source_ad",
+        "id": "9991000000000002",
+        "owner_page": "9991000000000002",
+        "owner_ig": null
+      }
+    ],
+    "kind": "copy",
+    "account_limit": false,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": false,
+    "reason": "rule 1: the copied ad's creative has no Instagram identity",
+    "basis": null,
+    "receipt": "fake-receipt-ig-missing__copy"
+  },
+  "reason_has": []
+}

@@ -1,0 +1,80 @@
+{
+  "name": "campaign-copy",
+  "covers": [
+    "campaign-copy"
+  ],
+  "decided_by": "rule 4",
+  "why": "a campaign copy creates a campaign whose buying_type the copy endpoint does not send",
+  "for": "both",
+  "brand_status": {
+    "usb": "ready"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000134",
+    "tool": "ads_duplicate_campaign",
+    "method": "POST",
+    "path": "/9994000000001340/copies",
+    "params_keys": [
+      "deep_copy",
+      "status_option"
+    ],
+    "ad_account": "act_9990000000000001",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "campaign",
+      "id": "9994000000001340",
+      "created": false
+    },
+    "status": {
+      "before": "PAUSED",
+      "after": "PAUSED"
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [
+      {
+        "id": null,
+        "account_id": "act_9990000000000001",
+        "created": true,
+        "role": "destination",
+        "spend_cap_minor_before": null,
+        "spend_cap_minor_after": null,
+        "name": null,
+        "status_after": "PAUSED",
+        "buying_type": null
+      }
+    ],
+    "identity": [
+      {
+        "field": "object_story_spec.page_id",
+        "via": "source_ad",
+        "id": "9991000000000001",
+        "owner_page": "9991000000000001",
+        "owner_ig": null
+      }
+    ],
+    "kind": "copy",
+    "account_limit": false,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": false,
+    "reason": "rule 4: a campaign copy creates a campaign whose buying_type the copy endpoint does not send",
+    "basis": null,
+    "receipt": "fake-receipt-campaign-copy"
+  },
+  "reason_has": []
+}

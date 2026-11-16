@@ -1,0 +1,77 @@
+{
+  "name": "ro-no-account-limit",
+  "covers": [
+    "ro-no-account-limit"
+  ],
+  "decided_by": "rule 6",
+  "why": "rule 2 applies to ready brands only; a read-only brand's PAUSED create passes",
+  "for": "both",
+  "brand_status": {
+    "usb": "read-only"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000099",
+    "tool": "ads_create_ad_set",
+    "method": "POST",
+    "path": "/act_9990000000000001/adsets",
+    "params_keys": [
+      "name",
+      "campaign_id",
+      "status",
+      "daily_budget",
+      "billing_event",
+      "optimization_goal",
+      "targeting"
+    ],
+    "ad_account": "act_9990000000000001",
+    "account": {
+      "spend_cap_minor": null,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "adset",
+      "id": null,
+      "created": true
+    },
+    "status": {
+      "before": null,
+      "after": "PAUSED"
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": "daily",
+      "before_minor": null,
+      "after_minor": 1000,
+      "end_time": null
+    },
+    "campaigns": [
+      {
+        "id": "9994000000000990",
+        "account_id": "act_9990000000000001",
+        "created": false,
+        "role": "parent",
+        "spend_cap_minor_before": 100000,
+        "spend_cap_minor_after": 100000,
+        "name": "sb-usb-h1",
+        "status_after": "PAUSED",
+        "buying_type": "AUCTION"
+      }
+    ],
+    "identity": [],
+    "kind": "create",
+    "account_limit": false,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": true,
+    "reason": "allowed: rule 2 applies to ready brands only; a read-only brand's PAUSED create passes",
+    "basis": "non-spending",
+    "receipt": "fake-receipt-ro-no-account-limit"
+  },
+  "reason_has": []
+}

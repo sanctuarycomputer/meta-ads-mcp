@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MetaApiClient, metaApiClient, signGraphRequest } from "../../src/meta/client.js";
+import { PASS } from "../setup-write-gate.js";
 import { RateLimiter } from "../../src/meta/rate-limiter.js";
 import { WritePacer } from "../../src/meta/write-pacer.js";
 import { withPageToken } from "../../src/meta/page-token.js";
@@ -62,7 +63,7 @@ describe("every Graph request is signed with appsecret_proof", () => {
     tokenManager.resetForTests();
     metaApiClient.resetForTests();
     vi.stubGlobal("fetch", vi.fn(async () => mockFetchResponse({ data: [], id: "1", success: true })));
-    client = new MetaApiClient({ maxRetries: 0 });
+    client = new MetaApiClient({ writeGateForTests: PASS,  maxRetries: 0 });
   });
 
   afterEach(() => {
@@ -101,10 +102,10 @@ describe("every Graph request is signed with appsecret_proof", () => {
   it("lets no caller header replace or sit beside the Bearer header", async () => {
     // execute is the one choke point every method goes through; no public
     // method passes caller headers today, so it is driven directly.
-    const execute = (client as unknown as { execute: (m: string, u: string, p: string, o?: RequestInit) => Promise<unknown> }).execute.bind(client);
-    await execute("GET", "https://graph.facebook.com/v27.0/me", "/me", { headers: { authorization: "Bearer other-token", "X-Extra": "1" } });
-    await execute("GET", "https://graph.facebook.com/v27.0/me", "/me", { headers: new Headers({ Authorization: "Bearer other-token", "X-Extra": "1" }) });
-    await execute("GET", "https://graph.facebook.com/v27.0/me", "/me", { headers: [["AUTHORIZATION", "Bearer other-token"], ["X-Extra", "1"]] });
+    const execute = (client as unknown as { execute: (m: string, u: string, p: string, params: Record<string, unknown>, o?: RequestInit) => Promise<unknown> }).execute.bind(client);
+    await execute("GET", "https://graph.facebook.com/v27.0/me", "/me", {}, { headers: { authorization: "Bearer other-token", "X-Extra": "1" } });
+    await execute("GET", "https://graph.facebook.com/v27.0/me", "/me", {}, { headers: new Headers({ Authorization: "Bearer other-token", "X-Extra": "1" }) });
+    await execute("GET", "https://graph.facebook.com/v27.0/me", "/me", {}, { headers: [["AUTHORIZATION", "Bearer other-token"], ["X-Extra", "1"]] });
     expect(calls()).toHaveLength(3);
     for (const [, init] of calls()) {
       const headers = init?.headers as Record<string, string>;
@@ -139,7 +140,7 @@ describe("every Graph request is signed with appsecret_proof", () => {
   it("signs a retried call on every attempt", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout"] });
     try {
-      const retrying = new MetaApiClient({ maxRetries: 1 });
+      const retrying = new MetaApiClient({ writeGateForTests: PASS,  maxRetries: 1 });
       vi.mocked(fetch)
         .mockResolvedValueOnce(mockFetchResponse({}, { status: 500 }))
         .mockResolvedValueOnce(mockFetchResponse({ id: "1" }));
@@ -177,7 +178,7 @@ describe("every Graph request is signed with appsecret_proof", () => {
     vi.useFakeTimers({ toFake: ["setTimeout"] });
     let failure: unknown;
     try {
-      const retrying = new MetaApiClient({ maxRetries: 1 });
+      const retrying = new MetaApiClient({ writeGateForTests: PASS,  maxRetries: 1 });
       const done = retrying.get("/120001").catch((err: unknown) => { failure = err; });
       await vi.runAllTimersAsync();
       await done;
@@ -227,7 +228,7 @@ describe("a token that can't be a header value", () => {
     setupTestToken(TOKEN);
     tokenManager.resetForTests();
     vi.stubGlobal("fetch", vi.fn(async () => mockFetchResponse({ id: "1" })));
-    client = new MetaApiClient({ maxRetries: 0 });
+    client = new MetaApiClient({ writeGateForTests: PASS,  maxRetries: 0 });
   });
 
   afterEach(() => {
@@ -344,7 +345,7 @@ describe("access_token in any letter case, in the URL or a body", () => {
     setupTestToken(TOKEN);
     tokenManager.resetForTests();
     vi.stubGlobal("fetch", vi.fn(async () => mockFetchResponse({ id: "1" })));
-    client = new MetaApiClient({ maxRetries: 0 });
+    client = new MetaApiClient({ writeGateForTests: PASS,  maxRetries: 0 });
   });
 
   afterEach(() => {
@@ -404,7 +405,7 @@ describe("no app secret, no request", () => {
       else process.env.META_APP_SECRET = secret;
       let message = "";
       try {
-        new MetaApiClient({ maxRetries: 0 });
+        new MetaApiClient({ writeGateForTests: PASS,  maxRetries: 0 });
       } catch (err) {
         message = (err as Error).message;
       }
@@ -417,7 +418,7 @@ describe("no app secret, no request", () => {
     delete process.env.META_ACCESS_TOKEN;
     delete process.env.META_APP_SECRET;
     vi.stubGlobal("fetch", vi.fn(async () => mockFetchResponse({ id: "1" })));
-    const client = new MetaApiClient({ maxRetries: 0 });
+    const client = new MetaApiClient({ writeGateForTests: PASS,  maxRetries: 0 });
     process.env.META_ACCESS_TOKEN = TOKEN;
     await expect(client.get("/me")).rejects.toThrow(/META_APP_SECRET/);
     expect(fetch).not.toHaveBeenCalled();
@@ -426,7 +427,7 @@ describe("no app secret, no request", () => {
   it("refuses before any pacing or rate-limit state is touched", async () => {
     process.env.META_ACCESS_TOKEN = TOKEN;
     process.env.META_APP_SECRET = TEST_APP_SECRET;
-    const client = new MetaApiClient({ maxRetries: 0 });
+    const client = new MetaApiClient({ writeGateForTests: PASS,  maxRetries: 0 });
     delete process.env.META_APP_SECRET;
     vi.stubGlobal("fetch", vi.fn(async () => mockFetchResponse({ id: "1" })));
     const wait = vi.spyOn(RateLimiter.prototype, "waitIfNeeded");
@@ -441,13 +442,15 @@ describe("no app secret, no request", () => {
   it("resolves a detached read to undefined and sends nothing without a secret", async () => {
     delete process.env.META_APP_SECRET;
     vi.stubGlobal("fetch", vi.fn(async () => mockFetchResponse({ currency: "USD" })));
-    const client = new MetaApiClient({ maxRetries: 0 });
+    const client = new MetaApiClient({ writeGateForTests: PASS,  maxRetries: 0 });
     await expect(client.getDetached("/act_1", { fields: "currency" }, new AbortController().signal, "tenant-b-token")).resolves.toBeUndefined();
     expect(fetch).not.toHaveBeenCalled();
   });
 
   it("refuses to load the client module with a token and no secret", async () => {
     vi.resetModules();
+    // The real module, not the pass-through gate's mock (tests/setup-write-gate.ts).
+    vi.doUnmock("../../src/meta/client.js");
     process.env.META_ACCESS_TOKEN = TOKEN;
     delete process.env.META_APP_SECRET;
     await expect(import("../../src/meta/client.js")).rejects.toThrow(/META_APP_SECRET/);

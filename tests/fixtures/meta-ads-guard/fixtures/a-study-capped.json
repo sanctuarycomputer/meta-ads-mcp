@@ -1,0 +1,85 @@
+{
+  "name": "a-study-capped",
+  "covers": [
+    "a-study-capped"
+  ],
+  "decided_by": "rule 7",
+  "why": "a study whose two cells are capped at the default",
+  "for": "both",
+  "brand_status": {
+    "usb": "ready"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000032",
+    "tool": "ads_create_ad_study",
+    "method": "POST",
+    "path": "/9999000000000001/ad_studies",
+    "params_keys": [
+      "name",
+      "cells",
+      "start_time",
+      "end_time"
+    ],
+    "ad_account": "act_9990000000000001",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "study",
+      "id": null,
+      "created": true
+    },
+    "status": {
+      "before": null,
+      "after": null
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [
+      {
+        "id": "9994000000000320",
+        "account_id": "act_9990000000000001",
+        "created": false,
+        "role": "study-cell",
+        "spend_cap_minor_before": 100000,
+        "spend_cap_minor_after": 100000,
+        "name": "sb-usb-h1",
+        "status_after": "ACTIVE",
+        "buying_type": "AUCTION"
+      },
+      {
+        "id": "9994000000000321",
+        "account_id": "act_9990000000000001",
+        "created": false,
+        "role": "study-cell",
+        "spend_cap_minor_before": 100000,
+        "spend_cap_minor_after": 100000,
+        "name": "sb-usb-h2",
+        "status_after": "ACTIVE",
+        "buying_type": "AUCTION"
+      }
+    ],
+    "identity": [],
+    "kind": "study",
+    "account_limit": false,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": true,
+    "reason": "allowed: a study whose two cells are capped at the default",
+    "basis": "default-cap",
+    "receipt": "fake-receipt-a-study-capped"
+  },
+  "reason_has": []
+}

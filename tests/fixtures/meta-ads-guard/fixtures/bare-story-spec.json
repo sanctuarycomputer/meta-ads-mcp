@@ -1,0 +1,63 @@
+{
+  "name": "bare-story-spec",
+  "covers": [
+    "bare-story-spec"
+  ],
+  "decided_by": "rule 8",
+  "why": "object_story_spec sent with no path listed",
+  "for": "both",
+  "brand_status": {
+    "usb": "ready"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000120",
+    "tool": "ads_create_ad_creative",
+    "method": "POST",
+    "path": "/act_9990000000000001/adcreatives",
+    "params_keys": [
+      "name",
+      "object_story_spec"
+    ],
+    "ad_account": "act_9990000000000001",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "creative",
+      "id": null,
+      "created": true
+    },
+    "status": {
+      "before": null,
+      "after": null
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [],
+    "identity": [],
+    "kind": "create",
+    "account_limit": false,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": false,
+    "reason": "rule 8: unrecognised write: kind create at /act_9990000000000001/adcreatives",
+    "basis": null,
+    "receipt": "fake-receipt-bare-story-spec"
+  },
+  "reason_has": [
+    "create",
+    "/act_9990000000000001/adcreatives"
+  ]
+}

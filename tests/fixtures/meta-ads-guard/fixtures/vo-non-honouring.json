@@ -1,0 +1,86 @@
+{
+  "name": "vo-non-honouring",
+  "covers": [
+    "vo-non-honouring"
+  ],
+  "decided_by": "rule 1",
+  "why": "a read-only brand's validate_only study: ad_studies is not in validate_only_endpoints",
+  "for": "both",
+  "brand_status": {
+    "usb": "read-only"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000025",
+    "tool": "ads_create_ad_study",
+    "method": "POST",
+    "path": "/9999000000000001/ad_studies",
+    "params_keys": [
+      "name",
+      "cells",
+      "start_time",
+      "end_time",
+      "execution_options"
+    ],
+    "ad_account": "act_9990000000000001",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "study",
+      "id": null,
+      "created": true
+    },
+    "status": {
+      "before": null,
+      "after": null
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [
+      {
+        "id": "9994000000000250",
+        "account_id": "act_9990000000000001",
+        "created": false,
+        "role": "study-cell",
+        "spend_cap_minor_before": 100000,
+        "spend_cap_minor_after": 100000,
+        "name": "sb-usb-h1",
+        "status_after": "ACTIVE",
+        "buying_type": "AUCTION"
+      },
+      {
+        "id": "9994000000000251",
+        "account_id": "act_9990000000000001",
+        "created": false,
+        "role": "study-cell",
+        "spend_cap_minor_before": 100000,
+        "spend_cap_minor_after": 100000,
+        "name": "sb-usb-h2",
+        "status_after": "ACTIVE",
+        "buying_type": "AUCTION"
+      }
+    ],
+    "identity": [],
+    "kind": "study",
+    "account_limit": false,
+    "validate_only": true
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": false,
+    "reason": "rule 1: a read-only brand's validate_only study: ad_studies is not in validate_only_endpoints",
+    "basis": null,
+    "receipt": "fake-receipt-vo-non-honouring"
+  },
+  "reason_has": []
+}

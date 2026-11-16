@@ -1,0 +1,59 @@
+{
+  "name": "empty-campaigns-spending",
+  "covers": [
+    "empty-campaigns-spending"
+  ],
+  "decided_by": "rule 4",
+  "why": "an activation with no campaign listed",
+  "for": "both",
+  "brand_status": {
+    "usb": "ready"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000026",
+    "tool": "ads_update_ad_set",
+    "method": "POST",
+    "path": "/9995000000000026",
+    "params_keys": [
+      "status"
+    ],
+    "ad_account": "act_9990000000000001",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "adset",
+      "id": "9995000000000026",
+      "created": false
+    },
+    "status": {
+      "before": "PAUSED",
+      "after": "ACTIVE"
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [],
+    "identity": [],
+    "kind": "update",
+    "account_limit": false,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": false,
+    "reason": "rule 4: an activation with no campaign listed",
+    "basis": null,
+    "receipt": "fake-receipt-empty-campaigns-spending"
+  },
+  "reason_has": []
+}

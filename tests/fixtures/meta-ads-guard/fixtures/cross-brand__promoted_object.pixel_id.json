@@ -1,0 +1,87 @@
+{
+  "name": "cross-brand__promoted_object.pixel_id",
+  "covers": [
+    "cross-brand:promoted_object.pixel_id"
+  ],
+  "decided_by": "rule 1",
+  "why": "the pixel is in Arrangements' dataset_ids, not USB's",
+  "for": "both",
+  "brand_status": {
+    "usb": "ready"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000016",
+    "tool": "ads_create_ad_set",
+    "method": "POST",
+    "path": "/act_9990000000000001/adsets",
+    "params_keys": [
+      "name",
+      "campaign_id",
+      "status",
+      "daily_budget",
+      "billing_event",
+      "optimization_goal",
+      "promoted_object",
+      "targeting",
+      "promoted_object.pixel_id"
+    ],
+    "ad_account": "act_9990000000000001",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "adset",
+      "id": null,
+      "created": true
+    },
+    "status": {
+      "before": null,
+      "after": "PAUSED"
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": "daily",
+      "before_minor": null,
+      "after_minor": 1000,
+      "end_time": null
+    },
+    "campaigns": [
+      {
+        "id": "9994000000000160",
+        "account_id": "act_9990000000000001",
+        "created": false,
+        "role": "parent",
+        "spend_cap_minor_before": 100000,
+        "spend_cap_minor_after": 100000,
+        "name": "sb-usb-h1",
+        "status_after": "PAUSED",
+        "buying_type": "AUCTION"
+      }
+    ],
+    "identity": [
+      {
+        "field": "promoted_object.pixel_id",
+        "via": "direct",
+        "id": "9993000000000002",
+        "owner_page": null,
+        "owner_ig": null
+      }
+    ],
+    "kind": "create",
+    "account_limit": false,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": false,
+    "reason": "rule 1: the pixel is in Arrangements' dataset_ids, not USB's",
+    "basis": null,
+    "receipt": "fake-receipt-cross-brand__promoted_object.pixel_id"
+  },
+  "reason_has": []
+}

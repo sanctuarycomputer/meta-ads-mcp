@@ -1,0 +1,67 @@
+{
+  "name": "lookalike-page-seed",
+  "covers": [
+    "lookalike-page-seed"
+  ],
+  "decided_by": "rule 8",
+  "why": "a lookalike seeded from a Page",
+  "for": "both",
+  "brand_status": {
+    "usb": "ready"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000128",
+    "tool": "ads_create_lookalike_audience",
+    "method": "POST",
+    "path": "/act_9990000000000001/customaudiences",
+    "params_keys": [
+      "name",
+      "subtype",
+      "origin_audience_id",
+      "lookalike_spec",
+      "lookalike_spec.ratio",
+      "lookalike_spec.page_id"
+    ],
+    "ad_account": "act_9990000000000001",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "audience",
+      "id": null,
+      "created": true
+    },
+    "status": {
+      "before": null,
+      "after": null
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [],
+    "identity": [],
+    "kind": "create",
+    "account_limit": false,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": false,
+    "reason": "rule 8: unrecognised write: kind create at /act_9990000000000001/customaudiences",
+    "basis": null,
+    "receipt": "fake-receipt-lookalike-page-seed"
+  },
+  "reason_has": [
+    "create",
+    "/act_9990000000000001/customaudiences"
+  ]
+}

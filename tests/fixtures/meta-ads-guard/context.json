@@ -1,0 +1,98 @@
+{
+  "v": "1.0",
+  "note": "The fixtures' shared world (meta-ads-guard.md §13). Every id is made up and starts 999. A fixture's brand_status overrides a brand's status here. Shapes follow design §6.2 (brand map, 250's brands.json is authoritative) and §6.3 (policy).",
+  "brands": [
+    {
+      "id": "usb",
+      "code": "usb",
+      "name": "USB Club",
+      "entity": "USB Club LLC",
+      "business_id": "9999000000000001",
+      "ad_account": "act_9990000000000001",
+      "page_ids": ["9991000000000001"],
+      "instagram_user_ids": [],
+      "card": "Visa ••0001",
+      "currency": "USD",
+      "timezone": "America/New_York",
+      "status": "ready",
+      "dataset_ids": ["9993000000000001"]
+    },
+    {
+      "id": "arrangements",
+      "code": "arr",
+      "name": "Arrangements",
+      "entity": "Arrangements LLC",
+      "business_id": "9999000000000002",
+      "ad_account": "act_9990000000000002",
+      "page_ids": ["9991000000000002"],
+      "instagram_user_ids": ["9992000000000002"],
+      "card": "Visa ••0002",
+      "currency": "USD",
+      "timezone": "America/New_York",
+      "status": "ready",
+      "dataset_ids": ["9993000000000002"]
+    },
+    {
+      "id": "seaborne",
+      "code": "sea",
+      "name": "Seaborne",
+      "entity": "Garden3d LLC",
+      "business_id": "9999000000000003",
+      "ad_account": "act_9990000000000003",
+      "page_ids": ["9991000000000003"],
+      "instagram_user_ids": ["9992000000000003"],
+      "card": "Visa ••0003",
+      "currency": "USD",
+      "timezone": "America/New_York",
+      "status": "ready",
+      "dataset_ids": ["9993000000000003"]
+    },
+    {
+      "id": "garden3d_net",
+      "code": "g3d",
+      "name": "garden3d_net",
+      "entity": "Garden3d LLC",
+      "business_id": "9999000000000003",
+      "ad_account": "act_9990000000000003",
+      "page_ids": ["9991000000000004"],
+      "instagram_user_ids": ["9992000000000004"],
+      "card": "Visa ••0003",
+      "currency": "USD",
+      "timezone": "America/New_York",
+      "status": "ready",
+      "dataset_ids": ["9993000000000004"]
+    },
+    {
+      "id": "family",
+      "code": "fam",
+      "name": "Family Intelligence",
+      "entity": "Family Intelligence LLC",
+      "business_id": "9999000000000004",
+      "ad_account": "act_9990000000000004",
+      "page_ids": ["9991000000000005"],
+      "instagram_user_ids": [],
+      "card": "Visa ••0004",
+      "currency": "USD",
+      "timezone": "America/New_York",
+      "status": "pending",
+      "dataset_ids": []
+    }
+  ],
+  "accounts": {
+    "act_9990000000000003": { "default_brand": "garden3d_net" }
+  },
+  "policy": {
+    "v": 1,
+    "source": ["q-20261114-193549399-supervisor", "q-20261114-193550162-supervisor"],
+    "campaign_cap_default_minor": { "USD": 100000 },
+    "campaign_cap_min_minor": { "USD": 10000 },
+    "approvers": [{ "name": "Approver One", "email": "approver@example.com" }],
+    "validate_only_endpoints": [
+      "POST /act_{id}/campaigns",
+      "POST /{campaign_id}",
+      "POST /act_{id}/adsets",
+      "POST /act_{id}/ads",
+      "POST /act_{id}/adcreatives"
+    ]
+  }
+}

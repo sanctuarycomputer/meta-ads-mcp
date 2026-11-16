@@ -1,0 +1,79 @@
+{
+  "name": "ro-cap-raise-no-vo",
+  "covers": [
+    "ro-cap-raise-no-vo"
+  ],
+  "decided_by": "rule 1",
+  "why": "a read-only brand's cap raise without validate_only",
+  "for": "both",
+  "brand_status": {
+    "usb": "read-only"
+  },
+  "budgets": {
+    "9994000000000650": {
+      "rows": [
+        {
+          "budget": 2000
+        }
+      ]
+    }
+  },
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000065",
+    "tool": "ads_update_campaign",
+    "method": "POST",
+    "path": "/9994000000000650",
+    "params_keys": [
+      "spend_cap"
+    ],
+    "ad_account": "act_9990000000000001",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "campaign",
+      "id": "9994000000000650",
+      "created": false
+    },
+    "status": {
+      "before": "PAUSED",
+      "after": "PAUSED"
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [
+      {
+        "id": "9994000000000650",
+        "account_id": "act_9990000000000001",
+        "created": false,
+        "role": "self",
+        "spend_cap_minor_before": 100000,
+        "spend_cap_minor_after": 150000,
+        "name": "sb-usb-h1",
+        "status_after": "PAUSED",
+        "buying_type": "AUCTION"
+      }
+    ],
+    "identity": [],
+    "kind": "update",
+    "account_limit": false,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": false,
+    "reason": "rule 1: a read-only brand's cap raise without validate_only",
+    "basis": null,
+    "receipt": "fake-receipt-ro-cap-raise-no-vo"
+  },
+  "reason_has": []
+}

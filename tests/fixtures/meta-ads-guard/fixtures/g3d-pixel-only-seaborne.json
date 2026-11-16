@@ -1,0 +1,71 @@
+{
+  "name": "g3d-pixel-only-seaborne",
+  "covers": [
+    "g3d-pixel-only-seaborne"
+  ],
+  "decided_by": "rule 6",
+  "why": "a custom conversion on Seaborne's pixel on the shared Garden3d account is Seaborne's write",
+  "for": "both",
+  "brand_status": {
+    "seaborne": "ready"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000115",
+    "tool": "ads_create_custom_conversion",
+    "method": "POST",
+    "path": "/act_9990000000000003/customconversions",
+    "params_keys": [
+      "name",
+      "pixel_id",
+      "event_source_type",
+      "custom_event_type",
+      "rule"
+    ],
+    "ad_account": "act_9990000000000003",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "custom_conversion",
+      "id": null,
+      "created": true
+    },
+    "status": {
+      "before": null,
+      "after": null
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [],
+    "identity": [
+      {
+        "field": "pixel_id",
+        "via": "direct",
+        "id": "9993000000000003",
+        "owner_page": null,
+        "owner_ig": null
+      }
+    ],
+    "kind": "create",
+    "account_limit": false,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": true,
+    "reason": "allowed: a custom conversion on Seaborne's pixel on the shared Garden3d account is Seaborne's write",
+    "basis": "non-spending",
+    "receipt": "fake-receipt-g3d-pixel-only-seaborne"
+  },
+  "reason_has": []
+}

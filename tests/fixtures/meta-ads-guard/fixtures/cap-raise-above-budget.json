@@ -1,0 +1,79 @@
+{
+  "name": "cap-raise-above-budget",
+  "covers": [
+    "cap-raise-above-budget"
+  ],
+  "decided_by": "rule 5",
+  "why": "a cap raise to $2,500 above a $2,000 Budget",
+  "for": "both",
+  "brand_status": {
+    "usb": "ready"
+  },
+  "budgets": {
+    "9994000000000600": {
+      "rows": [
+        {
+          "budget": 2000
+        }
+      ]
+    }
+  },
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000060",
+    "tool": "ads_update_campaign",
+    "method": "POST",
+    "path": "/9994000000000600",
+    "params_keys": [
+      "spend_cap"
+    ],
+    "ad_account": "act_9990000000000001",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "campaign",
+      "id": "9994000000000600",
+      "created": false
+    },
+    "status": {
+      "before": "PAUSED",
+      "after": "PAUSED"
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [
+      {
+        "id": "9994000000000600",
+        "account_id": "act_9990000000000001",
+        "created": false,
+        "role": "self",
+        "spend_cap_minor_before": 100000,
+        "spend_cap_minor_after": 250000,
+        "name": "sb-usb-h1",
+        "status_after": "PAUSED",
+        "buying_type": "AUCTION"
+      }
+    ],
+    "identity": [],
+    "kind": "update",
+    "account_limit": false,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": false,
+    "reason": "rule 5: a cap raise to $2,500 above a $2,000 Budget",
+    "basis": null,
+    "receipt": "fake-receipt-cap-raise-above-budget"
+  },
+  "reason_has": []
+}

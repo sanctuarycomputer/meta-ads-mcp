@@ -1,0 +1,77 @@
+{
+  "name": "cross-brand__object_story_spec.instagram_user_id",
+  "covers": [
+    "cross-brand:object_story_spec.instagram_user_id"
+  ],
+  "decided_by": "rule 1",
+  "why": "the creative's Instagram account is Seaborne's",
+  "for": "both",
+  "brand_status": {
+    "usb": "ready"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000004",
+    "tool": "ads_create_ad_creative",
+    "method": "POST",
+    "path": "/act_9990000000000001/adcreatives",
+    "params_keys": [
+      "name",
+      "object_story_spec",
+      "object_story_spec.page_id",
+      "object_story_spec.instagram_user_id"
+    ],
+    "ad_account": "act_9990000000000001",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "creative",
+      "id": null,
+      "created": true
+    },
+    "status": {
+      "before": null,
+      "after": null
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [],
+    "identity": [
+      {
+        "field": "object_story_spec.page_id",
+        "via": "direct",
+        "id": "9991000000000001",
+        "owner_page": "9991000000000001",
+        "owner_ig": null
+      },
+      {
+        "field": "object_story_spec.instagram_user_id",
+        "via": "direct",
+        "id": "9992000000000003",
+        "owner_page": null,
+        "owner_ig": "9992000000000003"
+      }
+    ],
+    "kind": "create",
+    "account_limit": false,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": false,
+    "reason": "rule 1: the creative's Instagram account is Seaborne's",
+    "basis": null,
+    "receipt": "fake-receipt-cross-brand__object_story_spec.instagram_user_id"
+  },
+  "reason_has": []
+}

@@ -1,0 +1,71 @@
+{
+  "name": "non-sb",
+  "covers": [
+    "non-sb"
+  ],
+  "decided_by": "rule 4",
+  "why": "the campaign's name doesn't start sb-",
+  "for": "both",
+  "brand_status": {
+    "usb": "ready"
+  },
+  "budgets": {},
+  "foreign_ids": [],
+  "descriptor": {
+    "v": "1.0",
+    "request_id": "f0000000-0000-4000-8000-000000000029",
+    "tool": "ads_update_ad_set",
+    "method": "POST",
+    "path": "/9995000000000029",
+    "params_keys": [
+      "status"
+    ],
+    "ad_account": "act_9990000000000001",
+    "account": {
+      "spend_cap_minor": 500000,
+      "amount_spent_minor": 0
+    },
+    "object": {
+      "type": "adset",
+      "id": "9995000000000029",
+      "created": false
+    },
+    "status": {
+      "before": "PAUSED",
+      "after": "ACTIVE"
+    },
+    "budget": {
+      "currency": "USD",
+      "kind_before": null,
+      "kind_after": null,
+      "before_minor": null,
+      "after_minor": null,
+      "end_time": null
+    },
+    "campaigns": [
+      {
+        "id": "9994000000000290",
+        "account_id": "act_9990000000000001",
+        "created": false,
+        "role": "parent",
+        "spend_cap_minor_before": 100000,
+        "spend_cap_minor_after": 100000,
+        "name": "Spring sale",
+        "status_after": "ACTIVE",
+        "buying_type": "AUCTION"
+      }
+    ],
+    "identity": [],
+    "kind": "update",
+    "account_limit": false,
+    "validate_only": false
+  },
+  "reply": {
+    "v": "1.0",
+    "allow": false,
+    "reason": "rule 4: the campaign's name doesn't start sb-",
+    "basis": null,
+    "receipt": "fake-receipt-non-sb"
+  },
+  "reason_has": []
+}
