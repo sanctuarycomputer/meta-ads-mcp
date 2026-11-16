@@ -227,7 +227,15 @@ describe("a guarded write, through the real gate", () => {
 });
 
 describe("static", () => {
-  it("no file under src/ mentions writeGateForTests except client.ts's own declaration", () => {
+  // client.ts's only lines naming the seam: its declaration in the config type and the constructor's read of it.
+  const SEAM_LINES = [
+    "writeGateForTests?: (get: GraphGet) => WriteGate;",
+    "this.writeGate = config?.writeGateForTests ? config.writeGateForTests(get) : new RealWriteGate(get);",
+  ];
+  // The one other `ForTests` line in client.ts, older than the guard and unrelated to it (it resets the rate state).
+  const OTHER_FOR_TESTS = ["resetForTests(): void {"];
+
+  function srcFiles(): string[] {
     const files: string[] = [];
     const walk = (d: string): void => {
       for (const name of readdirSync(d)) {
@@ -237,17 +245,41 @@ describe("static", () => {
       }
     };
     walk(join(ROOT, "src"));
-    const mentions = files.flatMap((f) =>
+    return files;
+  }
+  const clientLines = () => readFileSync(join(ROOT, "src/meta/client.ts"), "utf8").split("\n").map((l) => l.trim());
+
+  it("no file under src/ but client.ts mentions writeGateForTests", () => {
+    const mentions = srcFiles()
+      .filter((f) => relative(ROOT, f) !== "src/meta/client.ts")
+      .flatMap((f) =>
+        readFileSync(f, "utf8")
+          .split("\n")
+          .filter((l) => l.includes("writeGateForTests"))
+          .map((l) => `${relative(ROOT, f)}: ${l.trim()}`),
+      );
+    expect(mentions).toEqual([]);
+  });
+
+  it("client.ts mentions writeGateForTests on exactly its declaration and the constructor's read, by any syntax", () => {
+    // Shorthand ({ writeGateForTests }), a computed or quoted key, or a local of that name each add a line.
+    expect(clientLines().filter((l) => l.includes("writeGateForTests"))).toEqual(SEAM_LINES);
+    // A name built from pieces still spells ForTests somewhere.
+    expect(clientLines().filter((l) => l.includes("ForTests"))).toEqual([...SEAM_LINES, ...OTHER_FOR_TESTS]);
+  });
+
+  it("the singleton is built with no argument, and is the only MetaApiClient src/ builds", () => {
+    // No config means no spread and no gate-shaped argument can reach the constructor.
+    expect(clientLines().filter((l) => l.includes("export const metaApiClient"))).toEqual([
+      "export const metaApiClient = new MetaApiClient();",
+    ]);
+    const builds = srcFiles().flatMap((f) =>
       readFileSync(f, "utf8")
         .split("\n")
-        .filter((l) => l.includes("writeGateForTests"))
+        .filter((l) => /new\s+MetaApiClient\b|MetaApiClient\s*\(/.test(l))
         .map((l) => `${relative(ROOT, f)}: ${l.trim()}`),
     );
-    expect(mentions.filter((m) => !m.startsWith("src/meta/client.ts: "))).toEqual([]);
-    // client.ts declares it once and reads it once (the constructor); nothing passes it.
-    const client = mentions.map((m) => m.slice("src/meta/client.ts: ".length));
-    expect(client.filter((l) => /^writeGateForTests\?: \(get: GraphGet\) => WriteGate;$/.test(l))).toHaveLength(1);
-    expect(client.filter((l) => /writeGateForTests\s*:/.test(l) && !l.startsWith("writeGateForTests?:"))).toEqual([]);
+    expect(builds).toEqual(["src/meta/client.ts: export const metaApiClient = new MetaApiClient();"]);
   });
 });
 
@@ -329,6 +361,38 @@ describe("P8: execution_options on the wire under validate_only, equal to the de
     expect(new URLSearchParams(String(w.init?.body)).get("execution_options")).toBe('["validate_only"]');
     expect(formKeys(w.init?.body)).toEqual([...descriptors()[0].params_keys].sort());
     expect((w.init?.headers as Record<string, string>)["Content-Type"]).toBe("application/x-www-form-urlencoded");
+  });
+});
+
+describe("postForm sends the decoded value re-encoded, the one the descriptor saw, never the caller's text (R3)", () => {
+  const FIRST = "9991000000000009";
+  const LAST = "9991000000000001";
+  it.each([
+    ["a duplicate key", `{"object_story_spec":{"page_id":"${FIRST}","page_id":"${LAST}","link_data":{"name":"x"}}}`],
+    ["non-canonical spacing", `  { "object_story_spec" : { "page_id" : "${LAST}" , "link_data" : { "name" : "x" } } }`],
+  ])("%s", async (_name, creative) => {
+    const client = clientWith(stub("record", log));
+    await inCall("ads_create_ad", () => client.postForm(`/${ACT}/ads`, { name: "x", creative })).run;
+    expect(writes()).toHaveLength(1);
+    const wire = new URLSearchParams(String(writes()[0].init?.body)).get("creative");
+    expect(wire).toBe(`{"object_story_spec":{"page_id":"${LAST}","link_data":{"name":"x"}}}`);
+    expect(wire).not.toBe(creative);
+    expect(wire).not.toContain(FIRST);
+    // The descriptor described that page, and only it.
+    const pages = descriptors()[0].identity.filter((e) => e.field === "object_story_spec.page_id").map((e) => e.id);
+    expect(pages).toEqual([LAST]);
+  });
+});
+
+describe("delete, the other form sender, also sends a decoded JSON field re-encoded (R3 sibling)", () => {
+  it.each([[false], [true]])("formBody %s", async (formBody) => {
+    const client = clientWith(stub("record", log));
+    const text = ' { "type" : "a" , "type" : "b" } ';
+    await inCall("ads_delete_ad", () => client.delete(`/${AD}`, { call_to_action: text }, undefined, formBody ? { formBody: true } : undefined)).run;
+    expect(writes()).toHaveLength(1);
+    const w = writes()[0];
+    const sent = formBody ? new URLSearchParams(String(w.init?.body)).get("call_to_action") : w.query.get("call_to_action");
+    expect(sent).toBe('{"type":"b"}');
   });
 });
 

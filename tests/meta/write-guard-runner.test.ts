@@ -43,7 +43,7 @@ const ALLOW_LINE = { v: "1.0", allow: true, reason: "ok", basis: "non-spending",
 const line = (o: unknown) => JSON.stringify(o) + "\n";
 
 describe("guardEnv", () => {
-  it("passes exactly PATH, HOME, NODE_* and NOTION_API_KEY, each only if set", () => {
+  it("passes exactly PATH, HOME, NODE_* and NOTION_API_KEY, each only if set; no META_* key of the write server", () => {
     expect(
       guardEnv({
         PATH: "/bin",
@@ -54,6 +54,11 @@ describe("guardEnv", () => {
         META_ACCESS_TOKEN: "t",
         META_APP_SECRET: "s",
         META_WRITE_GUARD_CMD: "c",
+        // The write server's other META_* keys (contract §11): none reaches the guard either.
+        META_APP_ID: "app-id",
+        META_API_VERSION: "v99.0",
+        META_ADS_TOOLSETS: "campaigns:write",
+        META_ADS_READ_ONLY: "1",
         OTHER: "o",
         XNODE_Y: "n",
       }),
@@ -71,7 +76,7 @@ describe("GuardRunner.decide", () => {
     });
   });
 
-  it("env-dump: the guard sees only PATH, HOME, NODE_X and NOTION_API_KEY", async () => {
+  it("env-dump: the guard sees only PATH, HOME, NODE_X and NOTION_API_KEY, none of the server's META_* keys", async () => {
     const env: NodeJS.ProcessEnv = {
       PATH: process.env.PATH,
       HOME: "/home/guard",
@@ -80,6 +85,10 @@ describe("GuardRunner.decide", () => {
       META_ACCESS_TOKEN: "meta-test-value",
       META_APP_SECRET: "app-test-value",
       META_WRITE_GUARD_CMD: stub("env-dump"),
+      META_APP_ID: "app-id",
+      META_API_VERSION: "v99.0",
+      META_ADS_TOOLSETS: "campaigns:write",
+      META_ADS_READ_ONLY: "1",
       OTHER: "other",
     };
     const r = await new GuardRunner({ env, cwd: ROOT }).decide(DESCRIPTOR);

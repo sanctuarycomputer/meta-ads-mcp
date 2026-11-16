@@ -1,16 +1,20 @@
 // Refusals, the validate-only stop and concurrent calls in the tool result (ticket 253, Task 6; spec §Design
 // "Result order", spec-3 S3-1 and S3-3, S4): served tools through createServer, and test tools registered through
 // toolFilter, on the real gate (record-allow.mjs), never tests/setup-write-gate.ts.
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import { metaApiClient } from "../../src/meta/client.js";
 import { createServer } from "../../src/server.js";
+import { registerBulkAdTools } from "../../src/tools/bulk-ads.js";
 import { READ, UPDATE, toolFilter } from "../../src/tools/_register.js";
 import { cleanupTestToken, mockFetchResponse, setupTestToken } from "../setup.js";
 import {
-  ADSET, BUSINESS, CAMP, LABEL, NOT_SENT, NO_WRITE, connect, descriptors, dropGuard, fake, formOf, installFetch,
+  ACT, ADSET, BUSINESS, CAMP, LABEL, NOT_SENT, NO_WRITE, connect, descriptors, dropGuard, fake, formOf, installFetch,
   smallWorld, textOf, useGuard, writes, type Sent, type ToolResult,
 } from "./validate-only-helpers.js";
 
@@ -28,6 +32,12 @@ vi.mock("../../src/meta/client.js", async (orig) => {
       writeGateForTests: (get) => new RealWriteGate(get, new GuardRunner({ env: guard.env, cwd, timeoutMs: 15_000 })),
     }),
   };
+});
+
+// ads_bulk_create_video_ads checks each file_url's host: resolve it to a public address without the network.
+vi.mock("../../src/utils/url-guard.js", async (orig) => {
+  const actual = await orig<typeof import("../../src/utils/url-guard.js")>();
+  return { ...actual, assertSafePublicUrl: (raw: string) => actual.assertSafePublicUrl(raw, { resolve: async () => [{ address: "93.184.216.34" }] }) };
 });
 
 const WRITE_LIST = "campaigns:write,adsets:write,ads:write,creatives:write,abtesting:write";
@@ -59,6 +69,15 @@ function testServer(): McpServer {
   filter.registerTool("test_write_then_refused", { inputSchema: {}, annotations: { ...UPDATE } }, async () => {
     await metaApiClient.postForm(`/${CAMP}`, { name: "a" });
     await metaApiClient.postForm(`/${CAMP}`, { method: "DELETE" });
+    return { content: [{ type: "text", text: "unreachable" }] };
+  });
+  // Catches the client's refusal and returns a normal result, as a best-effort step does.
+  filter.registerTool("test_swallow_refusal", { inputSchema: {}, annotations: { ...UPDATE } }, async () => {
+    try {
+      await metaApiClient.postForm(`/${CAMP}`, { method: "DELETE" });
+    } catch {
+      return { content: [{ type: "text", text: "ok" }] };
+    }
     return { content: [{ type: "text", text: "unreachable" }] };
   });
   filter.registerTool("test_write_then_throw", { inputSchema: {}, annotations: { ...UPDATE } }, async () => {
@@ -160,6 +179,80 @@ describe("rule 1: a refusal wins", () => {
     expect(textOf(r)).toBe(
       `${refused("a parameter named method would override the HTTP method")}\nwrites sent before it:\nPOST /${CAMP}`,
     );
+  });
+});
+
+describe("rule 1: a refusal the handler swallowed still wins (F1)", () => {
+  it("a test tool that catches the client's refusal and returns ok: isError with the refusal", async () => {
+    const r = await callOn(testServer(), "test_swallow_refusal", {});
+    expect(writes()).toHaveLength(0);
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toBe(`${refused("a parameter named method would override the HTTP method")}\nwrites sent before it: none`);
+    expect(textOf(r)).not.toContain("ok");
+  });
+
+  it("ads_update_ad_url_tags (served), whose per-group catch turns the guard's refusal of the replacement creative into a report", async () => {
+    useGuard(guard.env, "REFUSE_TOOL=ads_update_ad_url_tags");
+    const AD = "9998000000000001";
+    const CREATIVE = "9998100000000001";
+    const PAGE = "9996000000000001";
+    fake.world.set(`/${AD}`, { id: AD, metadata: { type: "ad" }, account_id: "9990000000000001", creative: { id: CREATIVE } });
+    fake.world.set(`/${CREATIVE}`, { id: CREATIVE, metadata: { type: "adcreative" }, effective_object_story_id: `${PAGE}_1`, url_tags: "utm_source=old" });
+    fake.world.set(`/${PAGE}`, { id: PAGE, metadata: { type: "page" }, name: "p" });
+    fake.world.set(`/${PAGE}_1`, { id: `${PAGE}_1`, from: { id: PAGE } });
+    const r = await call("ads_update_ad_url_tags", { ad_ids: [AD], url_tags: "utm_source=new" });
+    expect(writes()).toHaveLength(0);
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toBe(`${refused("guard denied: stub refuses ads_update_ad_url_tags")}\nwrites sent before it: none`);
+  });
+
+  // bulk-ads is a kept-out group (never served under toolsets), so it is registered here through toolFilter, the way
+  // every served group registers: its real handler is the case of a per-item catch that turns an error into a summary.
+  it("ads_bulk_create_video_ads through toolFilter, whose per-video catch turns the guard's refusal of the creative into a summary", async () => {
+    // A guard that allows every write but the creative, written for this test (the record-allow stub refuses by tool).
+    const dir = mkdtempSync(join(tmpdir(), "vo-swallow-"));
+    try {
+      const stub = join(dir, "refuse-creatives.mjs");
+      writeFileSync(
+        stub,
+        [
+          'let input = "";',
+          'process.stdin.setEncoding("utf8");',
+          'process.stdin.on("data", (c) => (input += c));',
+          'process.stdin.on("end", () => {',
+          "  const msg = JSON.parse(input);",
+          '  const reply = "outcome_for" in msg ? { v: "1.0", ack: true, receipt: "r-outcome" }',
+          '    : msg.path.endsWith("/adcreatives") ? { v: "1.0", allow: false, reason: "no creatives today", basis: null, receipt: "r-refusal" }',
+          '    : { v: "1.0", allow: true, reason: "allowed", basis: "non-spending", receipt: "r-allow" };',
+          '  process.stdout.write(JSON.stringify(reply) + "\\n");',
+          "});",
+        ].join("\n"),
+      );
+      guard.env.META_WRITE_GUARD_CMD = ["node", stub].join(" ");
+      const VIDEO = "9997000000000001";
+      const PAGE = "9996000000000001";
+      fake.world.set(`/${PAGE}`, { id: PAGE, metadata: { type: "page" }, name: "p" });
+      fake.world.set(`/${VIDEO}`, {
+        id: VIDEO,
+        status: { video_status: "ready" },
+        thumbnails: { data: [{ uri: "https://example.com/t.jpg", is_preferred: true }] },
+      });
+      fake.onWrite = (c: Sent) => mockFetchResponse(c.path.endsWith("/advideos") ? { id: VIDEO } : { success: true });
+      const server = new McpServer({ name: "t", version: "0" });
+      registerBulkAdTools(toolFilter(server, () => true) as unknown as McpServer);
+      const r = await callOn(server, "ads_bulk_create_video_ads", {
+        account_id: ACT,
+        ad_set_id: ADSET,
+        page_id: PAGE,
+        videos: [{ file_url: "https://example.com/v.mp4", ad_name: "v" }],
+        max_wait_seconds: 0,
+      });
+      expect(writes().map((w) => w.path)).toEqual([`/${ACT}/advideos`]);
+      expect(r.isError).toBe(true);
+      expect(textOf(r)).toBe(`${refused("guard denied: no creatives today")}\nwrites sent before it:\nPOST /${ACT}/advideos`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

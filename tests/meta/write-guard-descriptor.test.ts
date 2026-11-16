@@ -299,6 +299,43 @@ describe("rule 5: budget", () => {
     expect((await build(post(`/${ADSET}`, { name: "n" }), adsetWith({}))).d.budget).toMatchObject({ kind_before: null, kind_after: null });
   });
 
+  // lifetime_budget sent alone (final review R1): served tools send it so (ads_update_campaign, ads_update_ad_set,
+  // ads_create_campaign, ads_create_ad_set), and the guard decides a raise or a cut from it.
+  describe("lifetime_budget sent alone", () => {
+    const campWith = (b: World) =>
+      world({ [`/${CAMP}`]: { metadata: { type: "campaign" }, account_id: ACT_DIGITS, status: "PAUSED", effective_status: "PAUSED", name: "c", buying_type: "AUCTION", ...b } });
+
+    it.each([
+      ["campaign", () => campWith({ lifetime_budget: "50000" }), CAMP],
+      ["ad set", () => adsetWith({ lifetime_budget: "50000" }), ADSET],
+    ] as const)("an update that raises the lifetime budget (%s)", async (_kind, w, id) => {
+      const { d } = await build(post(`/${id}`, { lifetime_budget: 80000 }), w());
+      expect(d.budget).toMatchObject({ kind_before: "lifetime", before_minor: 50000, kind_after: "lifetime", after_minor: 80000 });
+    });
+
+    it.each([
+      ["campaign", () => campWith({ lifetime_budget: "50000" }), CAMP],
+      ["ad set", () => adsetWith({ lifetime_budget: "50000" }), ADSET],
+    ] as const)("an update that cuts the lifetime budget (%s)", async (_kind, w, id) => {
+      const { d } = await build(post(`/${id}`, { lifetime_budget: 20000 }), w());
+      expect(d.budget).toMatchObject({ kind_before: "lifetime", before_minor: 50000, kind_after: "lifetime", after_minor: 20000 });
+    });
+
+    it("an update that moves a daily ad set to a lifetime budget", async () => {
+      const { d } = await build(post(`/${ADSET}`, { lifetime_budget: 70000 }), adsetWith({ daily_budget: "1000" }));
+      expect(d.budget).toMatchObject({ kind_before: "daily", before_minor: 1000, kind_after: "lifetime", after_minor: 70000 });
+    });
+
+    it.each([
+      ["campaign", post(`/${ACT}/campaigns`, { name: "n", status: "PAUSED", lifetime_budget: 30000 })],
+      ["ad set", post(`/${ACT}/adsets`, { campaign_id: CAMP, name: "n", status: "PAUSED", lifetime_budget: 30000 })],
+    ] as const)("a create (%s)", async (_kind, req) => {
+      const { d } = await build(req, world());
+      expect(d.object.created).toBe(true);
+      expect(d.budget).toMatchObject({ kind_before: null, before_minor: null, kind_after: "lifetime", after_minor: 30000 });
+    });
+  });
+
   it("both budgets sent: kind_after and after_minor null", async () => {
     const { d } = await build(post(`/${ADSET}`, { daily_budget: 100, lifetime_budget: 5000 }), adsetWith({ daily_budget: "1000" }));
     expect(d.budget).toMatchObject({ kind_before: "daily", before_minor: 1000, kind_after: null, after_minor: null });
