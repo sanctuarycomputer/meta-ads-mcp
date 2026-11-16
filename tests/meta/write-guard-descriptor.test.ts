@@ -878,15 +878,14 @@ describe("skipped fixtures build their consistent form", () => {
     expect(d.campaigns[0].account_id).toBeNull();
   });
 
-  it.each(["cross-brand__asset_feed_spec", "garden3d-mixed-both"])(
-    "%s: an id in asset_feed_spec puts its path in params_keys and gets no entry",
-    async (name) => {
-      const d = await run(name);
-      expect(d.params_keys).toContain("asset_feed_spec.object_story_spec.page_id");
-      expect(d.identity.some((e) => e.via === "asset_feed_spec")).toBe(false);
-      expect(d.identity.every((e) => e.via === "direct")).toBe(true);
-    },
-  );
+  // Contract 1.1 §3.2 (C5): an asset_feed_spec entry comes from a leaf of its kind, whose path is in params_keys.
+  // This fixture's entries have no such leaf (only asset_feed_spec.bodies.text), so its nearest request has none.
+  it("garden3d-mixed-both: asset_feed_spec entries with no leaf of their kind are not built", async () => {
+    const d = await run("garden3d-mixed-both");
+    expect(d.params_keys.filter((k) => k.startsWith("asset_feed_spec."))).toEqual(["asset_feed_spec.bodies.text"]);
+    expect(d.identity.some((e) => e.via === "asset_feed_spec")).toBe(false);
+    expect(d.identity.every((e) => e.via === "direct")).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -980,8 +979,6 @@ describe("T4-3: a study cell or other read value of the wrong shape refuses", ()
   const cases: Array<[string, WriteRequest, string]> = [
     ["a cell's campaigns not an array", post(`/${BUSINESS}/ad_studies`, { cells: [{ campaigns: [CAMP] }, { campaigns: CAMP2 }] }), "cells.campaigns is not a list of ids"],
     ["a cell's adsets not an array", post(`/${BUSINESS}/ad_studies`, { cells: [{ campaigns: [CAMP] }, { adsets: ADSET2 }] }), "cells.adsets is not a list of ids"],
-    ["a cell key the builder doesn't read", post(`/${BUSINESS}/ad_studies`, { cells: [{ campaigns: [CAMP], adaccounts: [ACT] }] }), "cells.adaccounts is not a cell key the guard reads"],
-    ["a cell scalar key holding an object", post(`/${BUSINESS}/ad_studies`, { cells: [{ campaigns: [CAMP], name: { campaigns: [CAMP2] } }] }), "cells.name is not a cell key the guard reads"],
     ["a cell campaign object with more than its id", post(`/${BUSINESS}/ad_studies`, { cells: [{ campaigns: [{ id: CAMP, x: 1 }] }] }), "cells.campaigns is not an id"],
     ["a status that is not a status", post(`/${ADSET}`, { status: "LIVE" }), "status is not a status"],
     ["a status_option that is not one", post(`/${AD}/copies`, { status_option: "LIVE" }), "status_option is not a status option"],
@@ -992,6 +989,8 @@ describe("T4-3: a study cell or other read value of the wrong shape refuses", ()
     await expect(build(req, world())).rejects.toThrow(refused(detail));
   });
 
+  // Contract 1.1 C10: cells is bounded, so a cell key the builder doesn't read (cells.adaccounts) and a scalar key
+  // holding an object are paths for the guard (rule 8), not refusals here: tests/must-fix/builder-1-1.test.ts.
   it("a cell's campaigns as id objects, and its scalar keys, are read", async () => {
     const cells = [{ id: "1", name: "a", treatment_percentage: 50, campaigns: [{ id: CAMP }] }, { adsets: [ADSET2] }];
     const { d } = await build(post(`/${BUSINESS}/ad_studies`, { cells }), world());

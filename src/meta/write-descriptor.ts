@@ -708,7 +708,10 @@ const LEFT_OUT_CREATIVE_KEYS = [
   "wamo_whatsapp_identity_spec",
 ] as const;
 
-/** The fields of an attached creative's GET (contract §3.2 `creative_id`; ruling R1): every key §3.2 or §5 names. */
+/**
+ * The fields of an attached creative's GET (contract §3.2 `creative_id`; ruling R1; 1.1 C12): exactly the creative
+ * keys §3.2, §3.3 and §5 name, from the 1.1 table's creative keys and §5's left-out ones.
+ */
 export const CREATIVE_READ_FIELDS: string = [
   ...CREATIVE_KEYS,
   "effective_object_story_id",
@@ -816,14 +819,43 @@ const REQUEST_IDENTITY_FIELDS = [
 
 /**
  * Where each contract §3.2 field is read in a request: `direct` from the body's top level, `creative` from an
- * inline `creative`, each entry both the field and its dotted path. No `asset_feed_spec` entry: in 1.0 no
- * `sub_keys` leaf path there holds an identity id, so an id elsewhere in it puts its path in `params_keys`,
- * which rule 8 refuses.
+ * inline `creative`, each entry both the field and its dotted path. An id inside `asset_feed_spec` is read by
+ * its leaf's last key instead (`ASSET_FEED_KINDS`): no §5.1 `asset_feed_spec` path carries an id.
  */
 export const IDENTITY_FIELDS: Readonly<{ direct: readonly IdentityField[]; creative: readonly IdentityField[] }> = {
   direct: REQUEST_IDENTITY_FIELDS,
   creative: REQUEST_IDENTITY_FIELDS,
 };
+
+/**
+ * Contract 1.1 §3.2 `via: "asset_feed_spec"` (C5, C17): the identity kinds a leaf inside an `asset_feed_spec` can
+ * name, by the leaf's last key, each to the §3.2 field of its kind. A leaf whose last key is one of these and whose
+ * value is a Graph id is an entry; its path stays in `params_keys`, outside §5.1, so rule 8 decides once rule 1 has
+ * passed. Any other leaf, or a value that is not a Graph id, is no entry, and its path reaches `params_keys` too.
+ */
+export const ASSET_FEED_KINDS: Readonly<Record<string, IdentityField>> = {
+  page: "object_story_spec.page_id",
+  page_id: "object_story_spec.page_id",
+  instagram_user_id: "object_story_spec.instagram_user_id",
+  instagram_actor_id: "object_story_spec.instagram_user_id",
+  lead_gen_form_id: "object_story_spec.link_data.call_to_action.value.lead_gen_form_id",
+  pixel_id: "promoted_object.pixel_id",
+};
+
+// Every leaf of an `asset_feed_spec` value as [last key, value], walked as leafPaths walks it (array indices
+// dropped; a non-object in an array of objects is a leaf at the array's own key).
+function assetFeedLeaves(value: unknown, key: string, out: Array<[string, unknown]>): void {
+  if (isObj(value)) {
+    for (const [k, v] of Object.entries(value)) assetFeedLeaves(v, k, out);
+  } else if (Array.isArray(value) && value.some(holdsObject)) {
+    for (const e of value) {
+      if (holdsObject(e)) assetFeedLeaves(e, key, out);
+      else if (key) out.push([key, e]);
+    }
+  } else if (key) {
+    out.push([key, value]);
+  }
+}
 
 /** Spec M16: the object types an id-taking tool may write; a GET type outside its list is refused. */
 export const TOOL_EXPECTED_TYPES: Readonly<Record<string, readonly ObjectType[]>> = {
@@ -1081,9 +1113,9 @@ function assertReadable(params: Readonly<Obj>): void {
   }
 }
 
-// The keys a study body cell may carry: the ones the builder reads, and scalars that name no object.
+// The cell keys the builder reads (contract §3.1 study-cell). Every other cell key is left to the guard: `cells` is
+// bounded at 1.1 (C10), so each cell key's path is in params_keys and §5.1 decides it (rule 8: `cells.adaccounts`).
 const CELL_ID_LISTS = ["campaigns", "adsets"] as const;
-const CELL_SCALARS = ["id", "name", "description", "treatment_percentage", "control_percentage"];
 const STATUS_OPTIONS = ["ACTIVE", "PAUSED", "INHERITED_FROM_SOURCE"];
 
 // A request value that names a Graph object must be one: a value present but unreadable refuses, never drops.
@@ -1118,14 +1150,11 @@ function assertRequestValues(params: Readonly<Obj>): void {
   }
   for (const cell of Array.isArray(params.cells) ? (params.cells as Obj[]) : []) {
     for (const [k, v] of Object.entries(cell)) {
-      if ((CELL_ID_LISTS as readonly string[]).includes(k)) {
-        if (!Array.isArray(v)) throw new WriteRefusal(`cells.${k} is not a list of ids`);
-        for (const e of v) {
-          const onlyId = isObj(e) && Object.keys(e).length === 1 && has(e, "id");
-          requestId(`cells.${k}`, onlyId ? e.id : e);
-        }
-      } else if (!CELL_SCALARS.includes(k) || isObj(v) || Array.isArray(v)) {
-        throw new WriteRefusal(`cells.${k} is not a cell key the guard reads`);
+      if (!(CELL_ID_LISTS as readonly string[]).includes(k)) continue;
+      if (!Array.isArray(v)) throw new WriteRefusal(`cells.${k} is not a list of ids`);
+      for (const e of v) {
+        const onlyId = isObj(e) && Object.keys(e).length === 1 && has(e, "id");
+        requestId(`cells.${k}`, onlyId ? e.id : e);
       }
     }
   }
@@ -1415,7 +1444,9 @@ export async function buildDescriptor(req: WriteRequest, ctx: BuildContext, get:
     owner_ig: null,
   });
   // One identity value; false when it is not a readable id (a request's were refused up front, so only a value
-  // Graph reported reaches here unreadable, and its creative is then unresolved).
+  // Graph reported, or one inside an asset_feed_spec, reaches here unreadable: a reported one's creative is then
+  // unresolved, and an asset_feed_spec one is no entry). This GRAPH_ID test is the asset_feed_spec entries' Graph-id
+  // test (spec check 6).
   const resolve = async (field: IdentityField, via: IdentityVia, value: unknown): Promise<boolean> => {
     const id = graphId(value);
     if (id === null) return false;
@@ -1457,10 +1488,24 @@ export async function buildDescriptor(req: WriteRequest, ctx: BuildContext, get:
     if (!readable || !admittedCreativeSpec(spec)) add(unresolvedCreative(cid, via));
   };
 
+  // Contract 1.1 §3.2 `via: "asset_feed_spec"` (C5, C17; spec check 6): an `asset_feed_spec` sent top-level or
+  // in an inline creative. A leaf whose last key is a kind is an entry when `resolve` finds its value a Graph id
+  // (GRAPH_ID), resolved as that field is (a lead form to its Page, a pixel to no owner). Only a request's
+  // asset_feed_spec: a read creative's goes through admittedCreativeSpec, and an id path there leaves it unresolved.
+  const fromAssetFeed = async (spec: unknown): Promise<void> => {
+    const leaves: Array<[string, unknown]> = [];
+    assetFeedLeaves(spec, "", leaves);
+    for (const [key, value] of leaves) {
+      if (Object.hasOwn(ASSET_FEED_KINDS, key)) await resolve(ASSET_FEED_KINDS[key], "asset_feed_spec", value);
+    }
+  };
+
   await fromRequest(params, IDENTITY_FIELDS.direct, "direct");
+  if (has(params, "asset_feed_spec")) await fromAssetFeed(params.asset_feed_spec);
   if (has(params, "creative_id")) await fromCreative(params.creative_id, "creative_id");
   if (isObj(params.creative)) {
     await fromRequest(params.creative, IDENTITY_FIELDS.creative, "creative");
+    if (has(params.creative, "asset_feed_spec")) await fromAssetFeed(params.creative.asset_feed_spec);
     if (has(params.creative, "creative_id")) await fromCreative(params.creative.creative_id, "creative_id");
   }
   if (row?.id === "POST /{id}/copies" && object.id) {
