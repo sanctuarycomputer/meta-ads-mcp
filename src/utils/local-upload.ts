@@ -22,7 +22,8 @@ export type LocalUploadErrorCode =
   | "too-large"
   | "fd-mismatch"
   | "no-proc"
-  | "not-found";
+  | "not-found"
+  | "unreadable";
 
 export class LocalUploadError extends Error {
   constructor(
@@ -70,16 +71,20 @@ function maxBytesOf(opts: { maxBytes?: number } | undefined): number {
 
 const errno = (err: unknown) => (err as { code?: unknown })?.code;
 
-/** A missing root or file, refused without the path (it would reach the caller). */
-async function orNotFound<T>(work: () => Promise<T>): Promise<T> {
-  try {
-    return await work();
-  } catch (err) {
-    if (errno(err) === "ENOENT" || errno(err) === "ENOTDIR") {
-      throw new LocalUploadError("not-found", "No such file under the upload root.");
-    }
-    throw err;
-  }
+/**
+ * Turns a filesystem error into a LocalUploadError whose message never holds
+ * a path (the message reaches the caller): a missing root, directory or file
+ * is not-found, a symlink the open met is symlink, a socket or device the
+ * non-blocking open refused is not-regular, and anything else is unreadable.
+ */
+function mapFsError(err: unknown): LocalUploadError {
+  if (err instanceof LocalUploadError) return err;
+  const code = errno(err);
+  if (code === "ENOENT" || code === "ENOTDIR") return new LocalUploadError("not-found", "No such file under the upload root.");
+  if (code === "ELOOP") return new LocalUploadError("symlink", "The upload path must not be a symlink.");
+  if (code === "ENXIO") return new LocalUploadError("not-regular", "The upload path must name a regular file.");
+  const shown = typeof code === "string" && /^E[A-Z]+$/.test(code) ? ` (${code})` : "";
+  return new LocalUploadError("unreadable", `The file could not be read${shown}.`);
 }
 
 /** Each read asks for at most this much, well under fs.read's 2 GiB limit. */
@@ -92,29 +97,28 @@ export async function readLocalUpload(
 ): Promise<LocalUpload> {
   const segments = segmentsOf(relativePath);
   const maxBytes = maxBytesOf(opts);
-  const seams = __localUploadSeamsForTests;
+  try {
+    return await readChecked(root, segments, maxBytes);
+  } catch (err) {
+    throw mapFsError(err);
+  }
+}
 
-  const realRoot = await orNotFound(() => seams.realpath(root));
+async function readChecked(root: string, segments: string[], maxBytes: number): Promise<LocalUpload> {
+  const seams = __localUploadSeamsForTests;
+  const realRoot = await seams.realpath(root);
   const expected = path.join(realRoot, ...segments);
   // A symlink anywhere below the root (a middle directory included) makes the
   // resolved path differ from the joined one.
-  if ((await orNotFound(() => seams.realpath(expected))) !== expected) {
+  if ((await seams.realpath(expected)) !== expected) {
     throw new LocalUploadError("symlink", "The upload path must not pass through a symlink.");
   }
 
-  let handle: fs.FileHandle;
+  // O_NOFOLLOW refuses a final symlink (ELOOP). O_NONBLOCK: opening a FIFO
+  // must not wait for a writer; the regular-file check below then refuses it.
+  const handle = await fs.open(expected, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
-    // O_NONBLOCK: opening a FIFO or a device must not wait for a writer; the
-    // regular-file check below then refuses it.
-    handle = await fs.open(expected, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  } catch (err) {
-    if (errno(err) === "ELOOP") throw new LocalUploadError("symlink", "The upload path must not be a symlink.");
-    if (errno(err) === "ENOENT") throw new LocalUploadError("not-found", "No such file under the upload root.");
-    throw err;
-  }
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile()) {
+    if (!(await handle.stat()).isFile()) {
       throw new LocalUploadError("not-regular", "The upload path must name a regular file.");
     }
     let fdPath: string;
@@ -127,24 +131,24 @@ export async function readLocalUpload(
     if (fdPath !== expected) {
       throw new LocalUploadError("fd-mismatch", "The opened file is not the one that was checked.");
     }
-    // Sized from fstat, with one byte more to see a file that grew since: the
-    // read stops at the limit either way, in chunks fs.read accepts.
-    const buffer = Buffer.alloc(Math.min(stat.size, maxBytes) + 1);
+    // Read to end of file in chunks, hashing each, so the result is the whole
+    // file whatever fstat said (it may have grown or shrunk since), and stop
+    // as soon as it passes the limit. One hash update per chunk keeps every
+    // call far under the hash's 2 GiB input limit.
+    const hash = createHash("sha256");
+    const chunks: Buffer[] = [];
     let size = 0;
-    while (size < buffer.length) {
-      const want = Math.min(READ_CHUNK_BYTES, buffer.length - size);
-      const { bytesRead } = await handle.read(buffer, size, want, null);
+    for (;;) {
+      const chunk = Buffer.alloc(Math.min(READ_CHUNK_BYTES, maxBytes + 1 - size));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
       if (bytesRead === 0) break;
       size += bytesRead;
+      if (size > maxBytes) throw new LocalUploadError("too-large", `The file is larger than ${maxBytes} bytes.`);
+      const filled = chunk.subarray(0, bytesRead);
+      hash.update(filled);
+      chunks.push(filled);
     }
-    if (size > maxBytes) throw new LocalUploadError("too-large", `The file is larger than ${maxBytes} bytes.`);
-    const bytes = buffer.subarray(0, size);
-    return {
-      bytes,
-      sha256: createHash("sha256").update(bytes).digest("hex"),
-      size,
-      name: segments[segments.length - 1],
-    };
+    return { bytes: Buffer.concat(chunks, size), sha256: hash.digest("hex"), size, name: segments[segments.length - 1] };
   } finally {
     await handle.close();
   }

@@ -5,7 +5,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdtempSync, mkdirSync, readdirSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -136,6 +137,80 @@ describe.skipIf(process.platform !== "linux")("M9: readLocalUpload", () => {
       expect((err as LocalUploadError).code).toBe("not-found");
       expect((err as Error).message).not.toContain(base);
     }
+  });
+
+  it("reads a file larger than one read chunk, byte for byte", async () => {
+    const bytes = Buffer.alloc(1024 * 1024 + 5);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = i % 251;
+    writeFileSync(path.join(root, "two.png"), bytes);
+    const got = await readLocalUpload(root, "two.png");
+    expect(got.bytes.equals(bytes)).toBe(true);
+    expect(got.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+  });
+
+  it("returns the whole file when it grew after opening", async () => {
+    const file = path.join(root, "grow.png");
+    writeFileSync(file, Buffer.alloc(10, 1));
+    seams.readFdPath = async (fd) => {
+      appendFileSync(file, Buffer.alloc(90, 2));
+      return original.readFdPath(fd);
+    };
+    const got = await readLocalUpload(root, "grow.png");
+    expect(got.size).toBe(100);
+    expect(got.sha256).toBe(createHash("sha256").update(got.bytes).digest("hex"));
+  });
+
+  it("refuses a file that grew past maxBytes after opening", async () => {
+    const file = path.join(root, "grow.png");
+    writeFileSync(file, Buffer.alloc(10, 1));
+    seams.readFdPath = async (fd) => {
+      appendFileSync(file, Buffer.alloc(90, 2));
+      return original.readFdPath(fd);
+    };
+    expect(await codeOf(() => readLocalUpload(root, "grow.png", { maxBytes: 50 }))).toBe("too-large");
+  });
+
+  it("returns what is left of a file that shrank after opening", async () => {
+    const file = path.join(root, "shrink.png");
+    writeFileSync(file, Buffer.alloc(100, 1));
+    seams.readFdPath = async (fd) => {
+      truncateSync(file, 3);
+      return original.readFdPath(fd);
+    };
+    expect((await readLocalUpload(root, "shrink.png")).size).toBe(3);
+  });
+
+  it("refuses a path through a file as not-found", async () => {
+    writeFileSync(path.join(root, "afile"), "x");
+    const err = await readLocalUpload(root, "afile/x.png").catch((e: unknown) => e);
+    expect((err as LocalUploadError).code).toBe("not-found");
+    expect((err as Error).message).not.toContain(base);
+  });
+
+  it("refuses a unix socket as not-regular", async () => {
+    const sock = path.join(root, "s.png");
+    const server: Server = createServer();
+    await new Promise<void>((resolve) => server.listen(sock, resolve));
+    try {
+      expect(await codeOf(() => readLocalUpload(root, "s.png"))).toBe("not-regular");
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("refuses an over-long name as unreadable, without the path", async () => {
+    const err = await readLocalUpload(root, "n".repeat(300)).catch((e: unknown) => e);
+    expect((err as LocalUploadError).code).toBe("unreadable");
+    expect((err as Error).message).not.toContain(base);
+  });
+
+  it.skipIf(process.getuid?.() === 0)("refuses an unreadable file as unreadable, without the path", async () => {
+    const file = path.join(root, "locked.png");
+    writeFileSync(file, "x");
+    chmodSync(file, 0o000);
+    const err = await readLocalUpload(root, "locked.png").catch((e: unknown) => e);
+    expect((err as LocalUploadError).code).toBe("unreadable");
+    expect((err as Error).message).not.toContain(base);
   });
 
   it("refuses when the descriptor's real path differs", async () => {
