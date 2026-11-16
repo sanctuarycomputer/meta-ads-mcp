@@ -22,8 +22,10 @@
  *      the name they are declared under (declarations, function-valued
  *      variables, properties and methods); a function a block reaches only some
  *      other way (wrapped in a call, held in an array, in a class constructor,
- *      assigned after its declaration, behind a getter) is left to the runtime
- *      probe. A local sharing a name with a writing function elsewhere in the
+ *      assigned after its declaration, behind a getter, or as a member of a
+ *      holder the block uses whole, as in retry(hooks) or table[key]()) is
+ *      left to the runtime probe. Any name in a block, a local or a property
+ *      read such as r.update, that matches a writing function elsewhere in the
  *      file fails the check: rename one. On the read server,
  *      253's client method allowlist (META_ADS_READ_ONLY=1) is the runtime
  *      backstop.
