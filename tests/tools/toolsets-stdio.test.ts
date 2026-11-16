@@ -21,6 +21,7 @@ const state = vi.hoisted(() => ({
   listed: [] as string[],
   pino: [] as Array<{ options: unknown; destination: unknown }>,
   httpFactory: undefined as undefined | (() => McpServer),
+  httpPort: undefined as undefined | number,
   settle: (_how: string) => {},
 }));
 
@@ -42,8 +43,9 @@ function mockHttp(): void {
   vi.doMock("../../src/transport/http.js", () => {
     state.httpLoaded++;
     return {
-      startHttpTransport: vi.fn(async (factory: () => McpServer) => {
+      startHttpTransport: vi.fn(async (factory: () => McpServer, port: number) => {
         state.httpFactory = factory;
+        state.httpPort = port;
         state.started.push("http");
         state.settle("http");
       }),
@@ -83,7 +85,7 @@ class Exit extends Error {
 
 type Outcome = { how: string; code?: number; stderr: string };
 
-const ENV = ["META_ADS_TOOLSETS", "META_ADS_READ_ONLY", "FIRESTORE_PROJECT_ID"] as const;
+const ENV = ["META_ADS_TOOLSETS", "META_ADS_READ_ONLY", "FIRESTORE_PROJECT_ID", "PORT"] as const;
 const savedEnv = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
 const savedArgv = process.argv;
 
@@ -96,6 +98,7 @@ beforeEach(() => {
   state.listed = [];
   state.pino = [];
   state.httpFactory = undefined;
+  state.httpPort = undefined;
 });
 
 afterEach(() => {
@@ -130,7 +133,11 @@ async function launch(args: string[], env: Record<string, string> = {}): Promise
     if (error instanceof Exit) return { how: "exit", code: error.code, stderr };
     throw error;
   }
-  const how = await Promise.race([started, new Promise<string>((r) => setTimeout(() => r("timeout"), 10_000))]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const how = await Promise.race([started, new Promise<string>((r) => (timer = setTimeout(() => r("timeout"), 10_000)))]);
+  clearTimeout(timer);
+  // Let main() run on past the start function, so anything it does afterwards is seen too.
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
   return { how, stderr };
 }
 
@@ -158,8 +165,9 @@ describe("stdio startup touches no network, Firestore, HTTP module or stdout (ch
   });
 
   it("http is the control: the HTTP module loads, and the logger is not on fd 2", async () => {
-    const out = await launch(["--transport", "http"]);
+    const out = await launch(["--transport", "http", "--port", "4567"]);
     expect(out.how).toBe("http");
+    expect(state.httpPort).toBe(4567);
     expect(state.httpLoaded).toBe(1);
     // Each request's server is the env's selection, not the catalogue.
     const server = state.httpFactory?.();
@@ -210,6 +218,28 @@ describe("--transport must be given as stdio or http (check 3.4)", () => {
 });
 
 describe("src/index.ts and isStdioTransport agree (check 3.6)", () => {
+  // Where node:util's parser and isStdioTransport read the flags differently, in
+  // either direction, nothing starts: the logger and the tenant switch would see
+  // a different transport from the one started.
+  it.each([
+    [["-xtstdio"]], // parser: stdio; isStdioTransport: http
+    [["-t", "stdio", "-xthttp"]], // parser: http; isStdioTransport: stdio
+  ])("%j disagrees, so exits 2 with nothing started", async (args) => {
+    expect(isStdioTransport(["node", "dist/index.js", ...args])).toBe(args.length === 3);
+    const out = await launch(args);
+    expect(out.how).toBe("exit");
+    expect(out.code).toBe(2);
+    expect(out.stderr).toMatch(/ambiguous/);
+    expect(state.started).toEqual([]);
+    expect(state.httpLoaded).toBe(0);
+  });
+
+  it("PORT sets the HTTP port when --port is not given", async () => {
+    const out = await launch(["--transport", "http"], { PORT: "4568" });
+    expect(out.how).toBe("http");
+    expect(state.httpPort).toBe(4568);
+  });
+
   it.each([
     ...STDIO_FORMS,
     ["--transport", "http"],
