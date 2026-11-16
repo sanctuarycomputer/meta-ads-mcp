@@ -30,8 +30,10 @@ export function getAccessToken(): string {
   // scrubbed is one string. A blank token is returned as "", not passed over
   // for the next source: the client refuses it rather than send another
   // token in its place.
+  // Any context with a string token decides, an empty one included (251
+  // final-3 F2): "" is refused downstream, never replaced by the env token.
   const ctx = requestContext.getStore();
-  if (ctx?.accessToken) {
+  if (ctx !== undefined && typeof ctx.accessToken === "string") {
     return ctx.accessToken.trim();
   }
 

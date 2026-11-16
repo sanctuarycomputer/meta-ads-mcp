@@ -130,7 +130,7 @@ describe("scrub covers logs and errors (done-when 3)", () => {
     // The redact config without the line scrub, so only the paths decide it.
     const log = pino({ redact: LOG_REDACT }, { write: (s: string) => void lines.push(s) });
     const [p, s, c] = ["p", "s", "c"].map((ch) => ch.repeat(20));
-    log.info({ appsecret_proof: p, app_secret: s, client_secret: c, n: { appsecret_proof: p } });
+    log.info({ appsecret_proof: p, app_secret: s, client_secret: c, n: { appsecret_proof: p, app_secret: s, client_secret: c } });
     expect(lines.join("")).not.toMatch(/p{20}|s{20}|c{20}/);
   });
 
