@@ -119,6 +119,7 @@ describe("admittedCreativeSpec: the destination screenshot setting (contract 1.2
       "enroll_status at the wrong depth": { enroll_status: "OPT_IN" },
       "a catalog beside it": { destination_screenshot_spec: { enroll_status: "OPT_IN" }, associated_product_set_id: "9998000000000002" },
       "an unparsed string": JSON.stringify({ destination_screenshot_spec: { enroll_status: "OPT_IN" } }),
+      "null": null,
     };
     for (const [name, sourcing] of Object.entries(refusedShapes)) expect(admittedCreativeSpec(liveCreative(sourcing)), name).toBe(false);
   });

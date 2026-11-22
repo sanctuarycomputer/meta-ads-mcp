@@ -714,7 +714,9 @@ const CREATIVE_KEYS: readonly string[] = [
 ].filter((k) => k !== "creative_id");
 
 /**
- * Contract §5's creative keys left out of every key set: read, so admittedCreativeSpec sees and refuses them.
+ * Creative keys outside the ad-create row that the creative GET still reads (contract §3.3, §5), so admittedCreativeSpec
+ * sees them: each is refused whole, except `creative_sourcing_spec` (in the creative-create set), whose §5.1 paths
+ * decide (1.2, C20).
  * `interactive_components_spec` left the key sets at 1.1 (C10) and is still read (C12: §3.3 and §5 name it).
  */
 const LEFT_OUT_CREATIVE_KEYS = [
@@ -732,7 +734,7 @@ const LEFT_OUT_CREATIVE_KEYS = [
 
 /**
  * The fields of an attached creative's GET (contract §3.2 `creative_id`; ruling R1; 1.1 C12): exactly the creative
- * keys §3.2, §3.3 and §5 name, from the 1.1 table's creative keys and §5's left-out ones.
+ * keys §3.2, §3.3 and §5 name: the ad-create row's creative keys and the left-out keys above (unchanged at 1.2).
  */
 export const CREATIVE_READ_FIELDS: string = [
   ...CREATIVE_KEYS,
