@@ -822,7 +822,6 @@ export const TYPE_PROBES: ReadonlyArray<readonly [string, ObjectType | "page"]> 
 const PROBED_TYPES: ReadonlySet<ObjectType> = new Set<ObjectType>(["campaign", "adset", "ad", "creative", "account"]);
 const presentField = (v: unknown): boolean =>
   (typeof v === "string" && v.length > 0) ||
-  (typeof v === "number" && Number.isFinite(v)) ||
   (isObj(v) && Object.keys(v).length > 0);
 
 // The client keeps no Meta code on its McpError, so code 10 is known by the classifier's own wording.
@@ -1320,7 +1319,7 @@ export async function buildDescriptor(req: WriteRequest, ctx: BuildContext, get:
     const ownFields = OWN_ACCOUNT_TYPES.has(type) ? OBJECT_FIELDS[type] : undefined;
     if (ownFields) {
       const ownAccount = (await readId(node, ownFields))?.account_id;
-      if (typeof ownAccount !== "string" || ownAccount === "") type = "other";
+      if (typeof ownAccount !== "string" || actOf(ownAccount) === null) type = "other";
     }
     object = { type, id: node || null, created: false };
     row = matchEndpoint(req.method, req.path, type);

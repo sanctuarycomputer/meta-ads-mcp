@@ -194,6 +194,15 @@ describe("every probe must answer (382 final 1, GB4)", () => {
   });
 
   it.each([
+    ["campaign", { ...CAMPAIGN, objective: 7 }],
+    ["ad set", { ...ADSET_NODE, optimization_goal: 7 }],
+    ["ad", { ...AD_NODE, adset_id: 7 }],
+    ["creative", { ...CREATIVE_NODE, effective_object_story_id: 7 }],
+  ])("a %s whose type field answers a number is other", async (_kind, node) => {
+    expect(await typeOf(node)).toBe("other");
+  });
+
+  it.each([
     ["campaign", CAMPAIGN],
     ["ad set", ADSET_NODE],
     ["ad", AD_NODE],
@@ -212,17 +221,28 @@ describe("a campaign, ad set or ad must show its own account (382 final 1, GA1)"
     ["adset", { optimization_goal: "Y", campaign_id: CAMP }],
     ["ad", { adset_id: ADSET, campaign_id: CAMP }],
   ];
+  const malformed = ["abc", `${ACT_DIGITS} `, ` ${ACT_DIGITS}`, "act_x"];
   const accounts: Array<[string, Node]> = [
     ["absent", {}],
     ["null", { account_id: null }],
     ["empty", { account_id: "" }],
-    ["a number", { account_id: 9990000000000001 }],
+    ["a safe-integer number", { account_id: 123456789 }],
+    ...malformed.map((s): [string, Node] => [`the malformed string ${JSON.stringify(s)}`, { account_id: s }]),
   ];
   const cases = lookAlikes.flatMap(([kind, node]) => accounts.map(([name, account]) => [kind, name, { ...node, ...account }] as const));
 
   it.each(cases)("a %s look-alike with its account %s is other", async (_kind, _name, node) => {
     expect(await typeOf(node)).toBe("other");
   });
+
+  it.each(lookAlikes.flatMap(([kind, node]) => malformed.map((s) => [kind, s, { ...node, account_id: s }] as const)))(
+    "a %s look-alike with the account %j takes none from its parent campaign",
+    async (_kind, _account, node) => {
+      const d = await build(post(`/${NODE}`), baseWorld({ [`/${NODE}`]: node }));
+      expect(d.ad_account).toBeNull();
+      expect(d.campaigns).toEqual([]);
+    },
+  );
 
   it.each(lookAlikes)("a %s look-alike takes no account from its parent campaign", async (_kind, node) => {
     const d = await build(post(`/${NODE}`), baseWorld({ [`/${NODE}`]: node }));
@@ -267,6 +287,7 @@ describe("what decides the path's type (382 final 1, GA2)", () => {
 
   it("a Page does not fall through to metadata", async () => {
     expect(await typeOf({ fan_count: 12, metadata: { type: "adstudy" } })).toBe("other");
+    expect(await typeOf({ fan_count: "12", metadata: { type: "adstudy" } })).toBe("other");
   });
 });
 
@@ -387,6 +408,13 @@ describe("a post's owner Page (382)", () => {
     });
     expect(storyEntries(await build(smallAttach, world("123456789")))[0].owner_page).toBe(PAGE);
     expect(storyEntries(await build(smallAttach, world(123456789)))[0].owner_page).toBeNull();
+  });
+
+  it("a write with no account takes no Page from the prefix, whatever string the creative's account is", async () => {
+    const req = post(`/${NODE}`, { creative: { creative_id: CREATIVE } });
+    const d = await build(req, withStory({ effective_object_story_id: STORY, account_id: "x" }));
+    expect(d.ad_account).toBeNull();
+    expect(storyEntries(d)[0]).toMatchObject({ id: STORY, owner_page: null });
   });
 
   it("a stored object_story_id with no effective id takes no Page from the prefix", async () => {
