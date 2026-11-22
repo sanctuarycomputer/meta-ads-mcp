@@ -3,6 +3,7 @@
 // matchEndpoint, deriveKind, deriveAccountLimit, deriveCreativeBearing, hostAllowed and validateDescriptor port the
 // contract's fake guard (tests/fixtures/meta-ads-guard/fake-guard.mjs) line for line; a test holds them equal.
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import { classifyMetaError } from "./errors.js";
 
 export const CONTRACT_VERSION = "1.0";
 
@@ -818,6 +819,17 @@ export const TYPE_PROBES: ReadonlyArray<readonly [string, ObjectType | "page"]> 
   ["fan_count", "page"],
 ];
 
+const PROBED_TYPES: ReadonlySet<ObjectType> = new Set<ObjectType>(["campaign", "adset", "ad", "creative", "account"]);
+const presentField = (v: unknown): boolean =>
+  (typeof v === "string" && v.length > 0) ||
+  (typeof v === "number" && Number.isFinite(v)) ||
+  (isObj(v) && Object.keys(v).length > 0);
+
+// The client keeps no Meta code on its McpError, so code 10 is known by the classifier's own wording.
+const CODE_10_PREFIX = classifyMetaError({ message: "", type: "", code: 10 }).mcpError.message.replace(/\(Meta: \)$/, "(Meta: ");
+const isCode10 = (err: unknown): boolean => err instanceof McpError && err.message.startsWith(CODE_10_PREFIX);
+const POST_ID = /^(\d{1,30})_\d{1,30}$/;
+
 /** A create row's id → the type it creates (contract §3 `object.type`, "for a create, the type being created"). */
 export const CREATED_TYPE: Readonly<Record<string, ObjectType>> = {
   "POST /act_{id}/campaigns": "campaign",
@@ -1253,6 +1265,19 @@ export async function buildDescriptor(req: WriteRequest, ctx: BuildContext, get:
     return { items, complete: false };
   };
 
+  // Contract 1.1 §3 object.type: exactly one kind's field present names the type; anything else fails closed.
+  const liveType = async (id: string): Promise<ObjectType> => {
+    const answers = await Promise.all(TYPE_PROBES.map(([field]) => read(`/${id}`, { fields: field })));
+    const kinds = new Set(TYPE_PROBES.filter(([field], i) => presentField(answers[i]?.[field])).map(([, kind]) => kind));
+    if (kinds.size > 1) return "other";
+    const [kind] = kinds;
+    if (kind === "page") return "other";
+    if (kind) return kind;
+    const meta = await read(`/${id}`, { metadata: 1, fields: "id" });
+    const type = objectTypeOf(meta && isObj(meta.metadata) ? (meta.metadata as Obj).type : undefined);
+    return PROBED_TYPES.has(type) ? "other" : type;
+  };
+
   // ---- rule 1: path and object ----
   const segments = req.path.replace(/^\/(v\d+\.\d+\/)?/, "").split("/");
   const node = segments[0] ?? "";
@@ -1273,8 +1298,7 @@ export async function buildDescriptor(req: WriteRequest, ctx: BuildContext, get:
     object = { type: createdType, id: null, created: true };
     row = anyRow;
   } else {
-    const meta = pathAct ? await read(`/${pathAct}`, { metadata: 1, fields: "id" }) : graphId(node) ? await read(`/${node}`, { metadata: 1, fields: "id" }) : null;
-    const type = objectTypeOf(meta && isObj(meta.metadata) ? (meta.metadata as Obj).type : undefined);
+    const type: ObjectType = pathAct ? "account" : graphId(node) ? await liveType(node) : "other";
     object = { type, id: node || null, created: false };
     row = matchEndpoint(req.method, req.path, type);
     // Rule 2 (M16): a tool that names its object type writes only that type.
@@ -1479,13 +1503,23 @@ export async function buildDescriptor(req: WriteRequest, ctx: BuildContext, get:
   // Graph reported, or one inside an asset_feed_spec, reaches here unreadable: a reported one's creative is then
   // unresolved, and an asset_feed_spec one is no entry). This GRAPH_ID test is the asset_feed_spec entries' Graph-id
   // test (spec check 6).
-  const resolve = async (field: IdentityField, via: IdentityVia, value: unknown): Promise<boolean> => {
+  // A post id Meta itself reported on a creative: when its owner read is refused with code 10, its prefix is its Page.
+  const reportedPostOwner = async (id: string): Promise<string | null> => {
+    try {
+      const a = await get<unknown>(`/${id}`, { fields: "from{id}" });
+      return isObj(a) && isObj(a.from) ? idString(a.from.id) : null;
+    } catch (err) {
+      return isCode10(err) ? (POST_ID.exec(id)?.[1] ?? null) : null;
+    }
+  };
+  const resolve = async (field: IdentityField, via: IdentityVia, value: unknown, reportedPost: string | null = null): Promise<boolean> => {
     const id = graphId(value);
     if (id === null) return false;
     const ownerKey = OWNER_KEY[field];
     const how = RESOLVE[field];
     let owner: string | null = null;
-    if (ownerKey && how) {
+    if (field === "object_story_id" && id === reportedPost) owner = await reportedPostOwner(id);
+    else if (ownerKey && how) {
       const a = await readId(id, how.fields);
       owner = a ? idString(how.owner(a)) : null;
     }
@@ -1499,10 +1533,10 @@ export async function buildDescriptor(req: WriteRequest, ctx: BuildContext, get:
     return true;
   };
   // Every identity value in a request or a creative as read; true when every one is a readable id.
-  const fromRequest = async (source: unknown, fields: readonly IdentityField[], via: IdentityVia): Promise<boolean> => {
+  const fromRequest = async (source: unknown, fields: readonly IdentityField[], via: IdentityVia, reportedPost: string | null = null): Promise<boolean> => {
     let readable = true;
     for (const field of fields) {
-      for (const v of valuesAt(source, field.split("."))) readable = (await resolve(field, via, v)) && readable;
+      for (const v of valuesAt(source, field.split("."))) readable = (await resolve(field, via, v, reportedPost)) && readable;
     }
     return readable;
   };
@@ -1513,9 +1547,10 @@ export async function buildDescriptor(req: WriteRequest, ctx: BuildContext, get:
     if (cid === null) return;
     const spec = graphId(cid) === null ? null : await read(`/${cid}`, { fields: CREATIVE_READ_FIELDS });
     if (!spec) return add(unresolvedCreative(cid, via));
-    let readable = await fromRequest(spec, IDENTITY_FIELDS.creative, via);
+    const reportedPost = idString(spec.effective_object_story_id);
+    let readable = await fromRequest(spec, IDENTITY_FIELDS.creative, via, reportedPost);
     for (const [key, field] of CREATIVE_READ_ALIASES) {
-      if (has(spec, key)) readable = (await resolve(field, via, spec[key])) && readable;
+      if (has(spec, key)) readable = (await resolve(field, via, spec[key], reportedPost)) && readable;
     }
     if (!readable || !admittedCreativeSpec(spec)) add(unresolvedCreative(cid, via));
   };
