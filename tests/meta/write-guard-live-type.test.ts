@@ -1,10 +1,13 @@
 // Ticket 382: an object's type and a post's Page, from what Graph v27 really answers. The fake below answers as the
 // live probes did: no metadata.type, code 100 for a field the kind lacks, 200 without the field on a creative, and
 // code 10 for a post's owner.
-import { describe, expect, it } from "vitest";
+import { McpError } from "@modelcontextprotocol/sdk/types.js";
+import { describe, expect, it, vi } from "vitest";
 
+import { MetaApiClient } from "../../src/meta/client.js";
 import { classifyMetaError } from "../../src/meta/errors.js";
 import { buildDescriptor, validateDescriptor, type Descriptor, type GraphGet, type WriteRequest } from "../../src/meta/write-descriptor.js";
+import { cleanupTestToken, mockFetchResponse, setupTestToken } from "../setup.js";
 
 const ACT = "act_9990000000000001";
 const ACT_DIGITS = "9990000000000001";
@@ -19,6 +22,7 @@ const STORY = `${PAGE}_9998000000000086`;
 const FOREIGN_STORY = `${FOREIGN_PAGE}_9998000000000087`;
 
 const metaError = (code: number) => classifyMetaError({ message: "refused", type: "OAuthException", code }).mcpError;
+const CODE_10_WORDING = "MCP error -32600: Insufficient permissions for this operation. (Meta: ";
 
 type Node = Record<string, unknown> & { lenient?: boolean };
 type Answer = Node | Error;
@@ -76,6 +80,7 @@ describe("object.type from a type-revealing field (382)", () => {
     ["ad by adset_id", AD_NODE, "ad"],
     ["creative by object_story_spec", CREATIVE_NODE, "creative"],
     ["creative by effective_object_story_id", { lenient: true, effective_object_story_id: STORY }, "creative"],
+    ["a creative holding both story fields is one kind", { lenient: true, object_story_spec: { page_id: PAGE }, effective_object_story_id: STORY }, "creative"],
     ["a Page is detected and reported as other", PAGE_NODE, "other"],
   ])("%s", async (_name, node, want) => {
     expect(await typeOf(node)).toBe(want);
@@ -169,6 +174,10 @@ describe("rule 2 (M16) on live types (382)", () => {
   it.each(kinds)("the %s tool still writes its own type", async (type, id, tool) => {
     expect((await build(post(`/${id}`), baseWorld(), tool)).object.type).toBe(type);
   });
+
+  it.each(kinds)("the %s tool refuses a node whose detection failed closed", async (_type, _id, tool) => {
+    await expect(build(post(`/${NODE}`), baseWorld({ [`/${NODE}`]: new Error("down") }), tool)).rejects.toThrow(`${NODE} is a other`);
+  });
 });
 
 describe("a post's owner Page (382)", () => {
@@ -221,9 +230,31 @@ describe("a post's owner Page (382)", () => {
     ["code 100", metaError(100)],
     ["code 190", metaError(190)],
     ["a network error", new Error("Insufficient permissions for this operation.")],
+    ["another code whose Meta text quotes code 10's wording", classifyMetaError({ message: `${CODE_10_WORDING}x)`, type: "", code: 100 }).mcpError],
+    ["a plain Error with code 10's whole wording", new Error(`${CODE_10_WORDING}x)`)],
   ])("%s on from{id} stays unresolved", async (_name, answer) => {
     const [e] = storyEntries(await build(attach, withStory({ effective_object_story_id: STORY }, answer)));
     expect(e.owner_page).toBeNull();
+  });
+
+  it("code 10 as the real client rethrows it still takes the Page from the prefix", async () => {
+    setupTestToken();
+    vi.stubGlobal("fetch", vi.fn(async () => mockFetchResponse({ error: { code: 10, type: "OAuthException", message: "refused" } }, { status: 400 })));
+    try {
+      const thrown = await new MetaApiClient({ maxRetries: 0 }).get(`/${STORY}`, { fields: "from{id}" }).catch((err: unknown) => err);
+      expect(thrown).toBeInstanceOf(McpError);
+      const [e] = storyEntries(await build(attach, withStory({ effective_object_story_id: STORY }, thrown as Error)));
+      expect(e.owner_page).toBe(PAGE);
+    } finally {
+      vi.unstubAllGlobals();
+      cleanupTestToken();
+    }
+  });
+
+  it("the reported id under another identity field takes no Page from its prefix", async () => {
+    const d = await build(attach, withStory({ effective_object_story_id: STORY, object_story_spec: { page_id: STORY } }));
+    const entry = d.identity.find((e) => e.field === "object_story_spec.page_id");
+    expect(entry).toMatchObject({ id: STORY, owner_page: null });
   });
 
   it("a typed object_story_id with the brand's prefix stays unresolved, top-level", async () => {
