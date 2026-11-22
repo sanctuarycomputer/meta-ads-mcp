@@ -4,6 +4,8 @@
 // recording stub guard (record-allow.mjs), so only the client decides.
 import { existsSync, readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { withLiveTypes } from "../meta/live-type-graph.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { MetaApiClient, lastWriteFate, notSentOf } from "../../src/meta/client.js";
@@ -65,7 +67,7 @@ const clientWith = (opts: { timeout?: number; maxRetries?: number } = {}) =>
   new MetaApiClient({
     maxRetries: 0,
     ...opts,
-    writeGateForTests: (get) => new RealWriteGate(get, new GuardRunner({ env: guardEnv, cwd: ROOT, timeoutMs: 15_000 })),
+    writeGateForTests: (get) => new RealWriteGate(withLiveTypes(get), new GuardRunner({ env: guardEnv, cwd: ROOT, timeoutMs: 15_000 })),
   });
 
 function inCall<T>(work: () => Promise<T>, tool = "ads_update_campaign") {

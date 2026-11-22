@@ -4,6 +4,8 @@
 // `normalise`s equal to a fixture's. The fake runs behind stubs/tee-stderr.mjs, whose log shows which fixture it
 // matched and every message the fork sent. Contract docs/contracts/meta-ads-guard.md@1.1 §2, §8, §9, §10, §13.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { withLiveTypes } from "./live-type-graph.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -97,7 +99,7 @@ function clientWith(cmd: string, timeoutMs = 15_000): MetaApiClient {
   // The real gate and runner; only the runner's cwd (§2: /app, absent here) and timeout are the test's.
   return new MetaApiClient({
     maxRetries: 0,
-    writeGateForTests: (get) => new RealWriteGate(get, new GuardRunner({ env, cwd: ROOT, timeoutMs })),
+    writeGateForTests: (get) => new RealWriteGate(withLiveTypes(get), new GuardRunner({ env, cwd: ROOT, timeoutMs })),
   });
 }
 const teeCmd = () => ["node", TEE, log, "--", "node", FAKE, "--fixtures", FIXTURE_DIR].join(" ");

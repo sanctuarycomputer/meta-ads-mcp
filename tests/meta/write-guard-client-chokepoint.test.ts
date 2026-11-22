@@ -2,6 +2,8 @@
 // docs/contracts/meta-ads-guard.md §2 "Client refusals"). Every client method, on both servers: no request is sent,
 // the guard never runs (the stub would write its file), and the caller gets the reason.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { withLiveTypes } from "./live-type-graph.js";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,7 +30,7 @@ function clientAt(baseUrl?: string): MetaApiClient {
   return new MetaApiClient({
     maxRetries: 0,
     ...(baseUrl === undefined ? {} : { baseUrl }),
-    writeGateForTests: (get) => new RealWriteGate(get, new GuardRunner({ env, cwd: ROOT, timeoutMs: 15_000 })),
+    writeGateForTests: (get) => new RealWriteGate(withLiveTypes(get), new GuardRunner({ env, cwd: ROOT, timeoutMs: 15_000 })),
   });
 }
 

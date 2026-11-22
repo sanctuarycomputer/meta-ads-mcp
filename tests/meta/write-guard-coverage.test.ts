@@ -3,6 +3,8 @@
 // that resolves to the row the coverage implies (matchEndpoint). The one exception is a `POST /{act}` node write
 // from a tool outside ACCOUNT_TOOLS (ads_activate_entity), which M16 refuses before any read (P2-4).
 import { describe, expect, it } from "vitest";
+
+import { withLiveTypes } from "./live-type-graph.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -123,7 +125,7 @@ describe("endpoints.json coverage", () => {
       expect(reads).toEqual([]);
       return;
     }
-    const d = await buildDescriptor(req, ctx, graphFor(r));
+    const d = await buildDescriptor(req, ctx, withLiveTypes(graphFor(r)));
     expect(validateDescriptor(d)).toEqual([]);
     expect(d.tool).toBe(tool);
     expect(matchEndpoint(d.method, d.path, d.object.type)?.id).toBe(impliedRow(r).id);

@@ -21,7 +21,7 @@ beforeEach(() => {
   setupTestToken();
   calls = [];
   const world = new Map<string, unknown>([
-    [`/${CAMP}`, { id: CAMP, metadata: { type: "campaign" }, account_id: "9990000000000001", name: "c", status: "PAUSED", effective_status: "PAUSED", buying_type: "AUCTION", spend_cap: "100000" }],
+    [`/${CAMP}`, { id: CAMP, objective: "OUTCOME_LEADS", metadata: { type: "campaign" }, account_id: "9990000000000001", name: "c", status: "PAUSED", effective_status: "PAUSED", buying_type: "AUCTION", spend_cap: "100000" }],
     [`/${ACT}`, { id: ACT, metadata: { type: "adaccount" }, spend_cap: "500000", amount_spent: "0", currency: "USD" }],
   ]);
   vi.stubGlobal(

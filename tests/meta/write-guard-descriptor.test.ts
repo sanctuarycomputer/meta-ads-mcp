@@ -2,6 +2,8 @@
 // from a write's request and the fork's GETs. Every vendored fixture with a descriptor that 253 drives is rebuilt
 // from its scenario (tests/fixtures/meta-ads-guard/harness.ts) and must `normalise` equal; then one case per rule.
 import { describe, expect, it } from "vitest";
+
+import { withLiveTypes } from "./live-type-graph.js";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,10 +28,10 @@ interface Call {
 type World = Record<string, unknown>;
 
 function fakeGet(gets: ReadonlyMap<string, unknown>, calls: Call[]): GraphGet {
-  return async <T>(path: string, params: Record<string, string | number>): Promise<T> => {
+  return withLiveTypes(async <T>(path: string, params: Record<string, string | number>): Promise<T> => {
     calls.push({ path, params });
     return answerGet(gets, path, params) as T;
-  };
+  });
 }
 
 interface BuildOpts {
@@ -146,9 +148,8 @@ describe("rule 1: path and object", () => {
     expect(d.kind).toBe("create");
   });
 
-  it("any other row's object type comes from GET /{id} metadata, which picks the row", async () => {
-    const { d, calls } = await build(post(`/${ADSET}`, { name: "n" }), world());
-    expect(callTo(calls, `/${ADSET}`)[0].params).toEqual({ metadata: 1, fields: "id" });
+  it("any other row's object type comes from a GET of the node, which picks the row", async () => {
+    const { d } = await build(post(`/${ADSET}`, { name: "n" }), world());
     expect(d.object).toEqual({ type: "adset", id: ADSET, created: false });
     expect(d.kind).toBe("update");
   });
@@ -159,7 +160,7 @@ describe("rule 1: path and object", () => {
     expect(d.kind).toBe("copy");
   });
 
-  it("a failed metadata read is type other, and the row is matched with it", async () => {
+  it("a failed type read is type other, and the row is matched with it", async () => {
     const { d } = await build(post(`/${ADSET}`, { name: "n" }), world({ [`/${ADSET}`]: new Error("down") }));
     expect(d.object).toEqual({ type: "other", id: ADSET, created: false });
     expect(d.kind).toBe("other");
@@ -229,7 +230,7 @@ describe("rule 3: object fields, one GET per type", () => {
     expect(callTo(calls, `/${id}`).map((c) => c.params.fields)).toContain(fields);
   });
 
-  it("a Page post, an account or an unknown type reads no fields beyond its metadata", async () => {
+  it("a Page post, an account or an unknown type reads no fields beyond its type reads", async () => {
     const post_ = `${PAGE}_9998000000000086`;
     const { calls } = await build(post(`/${post_}`, { message: "m" }), world({ [`/${post_}`]: { metadata: { type: "post" } } }));
     expect(callTo(calls, `/${post_}`)).toHaveLength(1);

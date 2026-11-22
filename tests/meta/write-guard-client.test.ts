@@ -2,6 +2,8 @@
 // GuardRunner running a stub guard, contract docs/contracts/meta-ads-guard.md §2, §8, §9, §10), never the
 // pass-through gate tests/setup-write-gate.ts gives the singleton.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { withLiveTypes } from "./live-type-graph.js";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -80,7 +82,7 @@ function clientWith(cmd: string, opts: { timeout?: number; maxRetries?: number }
   return new MetaApiClient({
     maxRetries: 0,
     ...opts,
-    writeGateForTests: (get) => new RealWriteGate(get, new GuardRunner({ env, cwd: ROOT, timeoutMs: 15_000 })),
+    writeGateForTests: (get) => new RealWriteGate(withLiveTypes(get), new GuardRunner({ env, cwd: ROOT, timeoutMs: 15_000 })),
   });
 }
 
@@ -564,7 +566,7 @@ describe("the guard is asked once per request_id, above the resend loop", () => 
     const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: process.env.HOME ?? "/tmp", META_WRITE_GUARD_CMD: cmd() };
     const runner = new GuardRunner({ env, cwd: ROOT, timeoutMs: 300 });
     const decide = vi.spyOn(runner, "decide");
-    const client = new MetaApiClient({ maxRetries: 3, writeGateForTests: (get) => new RealWriteGate(get, runner) });
+    const client = new MetaApiClient({ maxRetries: 3, writeGateForTests: (get) => new RealWriteGate(withLiveTypes(get), runner) });
     vi.spyOn(MetaApiClient.prototype as unknown as { backoff: () => Promise<void> }, "backoff").mockResolvedValue(undefined);
     const { run } = inCall("ads_update_campaign", () => client.postForm(`/${CAMP}`, { name: "x" }));
     expect(await refusalOf(run)).toBe(refused(detail));

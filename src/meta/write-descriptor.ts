@@ -807,6 +807,17 @@ export function objectTypeOf(metadataType: unknown): ObjectType {
   return (typeof metadataType === "string" && TYPE_ALIASES.get(metadataType)) || "other";
 }
 
+// Graph v27 answers no metadata.type, and a whole read fails if one field is wrong for the kind, so each field is read
+// alone. A creative answers 200 for fields it lacks, so only a present value counts.
+export const TYPE_PROBES: ReadonlyArray<readonly [string, ObjectType | "page"]> = [
+  ["objective", "campaign"],
+  ["optimization_goal", "adset"],
+  ["adset_id", "ad"],
+  ["object_story_spec", "creative"],
+  ["effective_object_story_id", "creative"],
+  ["fan_count", "page"],
+];
+
 /** A create row's id → the type it creates (contract §3 `object.type`, "for a create, the type being created"). */
 export const CREATED_TYPE: Readonly<Record<string, ObjectType>> = {
   "POST /act_{id}/campaigns": "campaign",

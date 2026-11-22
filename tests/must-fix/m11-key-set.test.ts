@@ -23,13 +23,14 @@ vi.unmock("../../src/meta/client.js");
 vi.mock("../../src/meta/client.js", async (orig) => {
   const m = await orig<typeof import("../../src/meta/client.js")>();
   const { GuardRunner, RealWriteGate } = await import("../../src/meta/write-guard.js");
+  const { withLiveTypes } = await import("../meta/live-type-graph.js");
   const { fileURLToPath } = await import("node:url");
   const cwd = fileURLToPath(new URL("../..", import.meta.url));
   return {
     ...m,
     metaApiClient: new m.MetaApiClient({
       maxRetries: 0,
-      writeGateForTests: (get) => new RealWriteGate(get, new GuardRunner({ env: guard.env, cwd, timeoutMs: 15_000 })),
+      writeGateForTests: (get) => new RealWriteGate(withLiveTypes(get), new GuardRunner({ env: guard.env, cwd, timeoutMs: 15_000 })),
     }),
   };
 });
