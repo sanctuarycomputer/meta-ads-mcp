@@ -863,20 +863,25 @@ describe("skipped fixtures build their consistent form", () => {
     expect(d.ad_account).toBe(ACT);
   });
 
-  it("null-ad-account: no account anywhere gives null account facts, read from nothing", async () => {
+  // Final 1, GA1: an ad set that can't show its own account is `other`, so its typed tool is refused at build. The
+  // fixture stays for the guard; the fork no longer builds an `adset` with a null account.
+  it("null-ad-account: no account anywhere is refused for a typed tool, and reads no account facts", async () => {
     const calls: Call[] = [];
     const f = fixture("null-ad-account");
     const s = scenarioFor(f);
     // The nearest request: the parent campaign's account unreadable too, so nothing resolves the account.
     const camp = s.gets.get("/9994000000000950") as Record<string, unknown>;
     s.gets.set("/9994000000000950", { ...camp, account_id: undefined });
-    const d = await buildDescriptor(s, { tool: "ads_update_ad_set", validateOnly: false, requestId: "r", accounts: new Set() }, fakeGet(s.gets, calls));
+    await expect(
+      buildDescriptor(s, { tool: "ads_update_ad_set", validateOnly: false, requestId: "r", accounts: new Set() }, fakeGet(s.gets, [])),
+    ).rejects.toThrow("is a other");
+    const d = await buildDescriptor(s, { tool: "ads_test_tool", validateOnly: false, requestId: "r", accounts: new Set() }, fakeGet(s.gets, calls));
     expect(validateDescriptor(d)).toEqual([]);
+    expect(d.object.type).toBe("other");
     expect(d.ad_account).toBeNull();
     expect(d.account).toEqual({ spend_cap_minor: null, amount_spent_minor: null });
     expect(d.budget.currency).toBeNull();
     expect(calls.some((c) => c.params.fields === "spend_cap,amount_spent,currency")).toBe(false);
-    expect(d.campaigns[0].account_id).toBeNull();
   });
 
   // Contract 1.1 §3.2 (C5): an asset_feed_spec entry comes from a leaf of its kind, whose path is in params_keys.

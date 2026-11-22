@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import { answerGet } from "../fixtures/meta-ads-guard/harness.js";
+import { withLiveTypes } from "../meta/live-type-graph.js";
 import {
   ASSET_FEED_KINDS,
   CREATIVE_READ_FIELDS,
@@ -59,7 +60,7 @@ async function build(req: WriteRequest, gets: Map<string, unknown> = world()) {
     calls.push({ path, params });
     return answerGet(gets, path, params) as T;
   };
-  const d = await buildDescriptor(req, { tool: "ads_test_tool", validateOnly: false, requestId: "r", accounts: new Set() }, get);
+  const d = await buildDescriptor(req, { tool: "ads_test_tool", validateOnly: false, requestId: "r", accounts: new Set() }, withLiveTypes(get));
   expect(validateDescriptor(d)).toEqual([]);
   return { d, calls };
 }

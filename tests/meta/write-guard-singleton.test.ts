@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { metaApiClient } from "../../src/meta/client.js";
+import { TYPE_PROBES } from "../../src/meta/write-descriptor.js";
 import { RealWriteGate, callContext, newCallContext } from "../../src/meta/write-guard.js";
 import { answerGet } from "../fixtures/meta-ads-guard/harness.js";
 import { cleanupTestToken, mockFetchResponse, setupTestToken } from "../setup.js";
@@ -33,6 +34,10 @@ beforeEach(() => {
       if (c.method !== "GET") return mockFetchResponse({ success: true });
       const params: Record<string, string> = {};
       for (const [k, v] of url.searchParams) if (k !== "appsecret_proof") params[k] = v;
+      const node = world.get(c.path) as Record<string, unknown> | undefined;
+      if (TYPE_PROBES.some(([field]) => field === params.fields) && node && !(params.fields in node)) {
+        return mockFetchResponse({ error: { code: 100, type: "OAuthException", message: "Tried accessing nonexisting field" } }, { status: 400 });
+      }
       return mockFetchResponse(answerGet(world, c.path, params));
     }),
   );

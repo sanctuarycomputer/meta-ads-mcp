@@ -24,8 +24,12 @@ const FOREIGN_STORY = `${FOREIGN_PAGE}_9998000000000087`;
 const metaError = (code: number) => classifyMetaError({ message: "refused", type: "OAuthException", code }).mcpError;
 const CODE_10_WORDING = "MCP error -32600: Insufficient permissions for this operation. (Meta: ";
 
-type Node = Record<string, unknown> & { lenient?: boolean };
-type Answer = Node | Error;
+// A 200 whose body is not an object.
+class Raw {
+  constructor(readonly value: unknown) {}
+}
+type Node = Record<string, unknown> & { lenient?: boolean; failing?: Record<string, Error | Raw> };
+type Answer = Node | Error | Raw;
 
 const CAMPAIGN: Node = { objective: "OUTCOME_LEADS", account_id: ACT_DIGITS, status: "PAUSED", effective_status: "PAUSED", name: "c", buying_type: "AUCTION" };
 const ADSET_NODE: Node = { optimization_goal: "LINK_CLICKS", account_id: ACT_DIGITS, status: "PAUSED", campaign_id: CAMP };
@@ -42,7 +46,11 @@ function liveGet(world: Record<string, Answer>, calls: string[] = []): GraphGet 
     const answer = world[path];
     if (answer === undefined) throw metaError(100);
     if (answer instanceof Error) throw answer;
+    if (answer instanceof Raw) return answer.value as T;
     const names = String(params.fields ?? "").replace(/\{[^}]*\}/g, "").split(",").filter(Boolean);
+    const lost = names.length === 1 ? answer.failing?.[names[0]] : undefined;
+    if (lost instanceof Error) throw lost;
+    if (lost instanceof Raw) return lost.value as T;
     const out: Record<string, unknown> = { id: path.slice(1) };
     if (params.metadata === 1 && Object.hasOwn(answer, "metadata")) out.metadata = answer.metadata;
     for (const n of names) {
@@ -130,8 +138,8 @@ describe("type detection fails closed (382)", () => {
     },
   );
 
-  it("fan_count holding no usable value is no second kind", async () => {
-    for (const value of [null, "", {}, [], ["x"], false, true]) expect(await typeOf({ objective: "X", fan_count: value })).toBe("campaign");
+  it("a probe answering 200 with no usable value is neither a match nor a clean miss", async () => {
+    for (const value of [null, "", {}, [], ["x"], false, true]) expect(await typeOf({ ...CAMPAIGN, fan_count: value })).toBe("other");
   });
 
   it("a refused read or a network error is other", async () => {
@@ -144,15 +152,121 @@ describe("type detection fails closed (382)", () => {
   });
 
   it.each([
-    ["campaign and ad set", { objective: "X", optimization_goal: "Y" }],
-    ["ad and creative", { adset_id: ADSET, object_story_spec: { page_id: PAGE } }],
-    ["campaign and a Page", { objective: "X", fan_count: 3 }],
+    ["campaign and ad set", { ...CAMPAIGN, optimization_goal: "Y" }],
+    ["ad and creative", { ...AD_NODE, object_story_spec: { page_id: PAGE } }],
+    ["campaign and a Page", { ...CAMPAIGN, fan_count: 3 }],
   ])("two kinds matching is other: %s", async (_name, node) => {
     expect(await typeOf(node)).toBe("other");
   });
 
-  it("fan_count 0 is present, so it still counts as a second kind", async () => {
-    expect(await typeOf({ objective: "X", fan_count: 0 })).toBe("other");
+  it("a campaign answering fan_count 0 is other", async () => {
+    expect(await typeOf({ ...CAMPAIGN, fan_count: 0 })).toBe("other");
+  });
+});
+
+describe("every probe must answer (382 final 1, GB4)", () => {
+  const failures: Array<[string, Error]> = [
+    ["a network error", new Error("socket hang up")],
+    ["a rate limit", classifyMetaError({ message: "limit", type: "OAuthException", code: 4 }).mcpError],
+    ["code 10", metaError(10)],
+    ["object not found (code 100, subcode 33)", classifyMetaError({ message: "gone", type: "OAuthException", code: 100, error_subcode: 33 }).mcpError],
+    ["a plain Error with code 100's wording", new Error("MCP error -32602: Invalid parameter: x")],
+    ["another code quoting code 100's wording", classifyMetaError({ message: "MCP error -32602: Invalid parameter: x", type: "", code: 190 }).mcpError],
+  ];
+  const nodes: Array<[string, Node, string]> = [
+    ["campaign", CAMPAIGN, "optimization_goal"],
+    ["ad set", ADSET_NODE, "adset_id"],
+    ["ad", AD_NODE, "fan_count"],
+    ["creative", CREATIVE_NODE, "adset_id"],
+  ];
+  const cases = nodes.flatMap(([kind, node, field]) => failures.map(([why, err]) => [kind, why, node, field, err] as const));
+
+  it.each(cases)("a %s with %s on another kind's probe is other", async (_kind, _why, node, field, err) => {
+    expect(await typeOf({ ...node, failing: { [field]: err } })).toBe("other");
+  });
+
+  it("a creative whose probe answers 200 with a body that is no object is other", async () => {
+    expect(await typeOf({ ...CREATIVE_NODE, failing: { adset_id: new Raw(null) } })).toBe("other");
+  });
+
+  it("a creative holding a story field with no usable value is other", async () => {
+    expect(await typeOf({ ...CREATIVE_NODE, effective_object_story_id: null })).toBe("other");
+  });
+
+  it.each([
+    ["campaign", CAMPAIGN],
+    ["ad set", ADSET_NODE],
+    ["ad", AD_NODE],
+  ])("a %s that answers 200 without another kind's field is other", async (_kind, node) => {
+    expect(await typeOf({ ...node, lenient: true })).toBe("other");
+  });
+
+  it("a node of no probed kind that answers 200 without the fields is other, whatever metadata says", async () => {
+    expect(await typeOf({ lenient: true, metadata: { type: "customaudience" } })).toBe("other");
+  });
+});
+
+describe("a campaign, ad set or ad must show its own account (382 final 1, GA1)", () => {
+  const lookAlikes: Array<[string, Node]> = [
+    ["campaign", { objective: "X" }],
+    ["adset", { optimization_goal: "Y", campaign_id: CAMP }],
+    ["ad", { adset_id: ADSET, campaign_id: CAMP }],
+  ];
+  const accounts: Array<[string, Node]> = [
+    ["absent", {}],
+    ["null", { account_id: null }],
+    ["empty", { account_id: "" }],
+    ["a number", { account_id: 9990000000000001 }],
+  ];
+  const cases = lookAlikes.flatMap(([kind, node]) => accounts.map(([name, account]) => [kind, name, { ...node, ...account }] as const));
+
+  it.each(cases)("a %s look-alike with its account %s is other", async (_kind, _name, node) => {
+    expect(await typeOf(node)).toBe("other");
+  });
+
+  it.each(lookAlikes)("a %s look-alike takes no account from its parent campaign", async (_kind, node) => {
+    const d = await build(post(`/${NODE}`), baseWorld({ [`/${NODE}`]: node }));
+    expect(d.ad_account).toBeNull();
+    expect(d.campaigns).toEqual([]);
+  });
+
+  it("a failed own-fields read is other", async () => {
+    const calls: string[] = [];
+    const get = liveGet(baseWorld(), calls);
+    const lossy: GraphGet = async <T>(path: string, params: Record<string, string | number>): Promise<T> => {
+      if (path === `/${CAMP}` && String(params.fields).includes("account_id")) throw new Error("socket hang up");
+      return get<T>(path, params);
+    };
+    const d = await buildDescriptor(post(`/${CAMP}`), { tool: "ads_test_tool", validateOnly: false, requestId: "req-1", accounts: new Set([ACT]) }, lossy);
+    expect(d.object.type).toBe("other");
+  });
+});
+
+describe("what decides the path's type (382 final 1, GA2)", () => {
+  it("a node that is no Graph id is other, with no read", async () => {
+    const calls: string[] = [];
+    const d = await build(post("/not_a_graph_id"), baseWorld({ "/not_a_graph_id": CAMPAIGN }), "ads_test_tool", calls);
+    expect(d.object.type).toBe("other");
+    expect(calls.filter((c) => c.startsWith("/not_a_graph_id?"))).toEqual([]);
+  });
+
+  it("an act_<digits> edge is account, with no type read", async () => {
+    const calls: string[] = [];
+    const d = await build(post(`/${ACT}/not_an_edge`), baseWorld({ [`/${ACT}`]: { ...CAMPAIGN, spend_cap: "500000" } }), "ads_test_tool", calls);
+    expect(d.object.type).toBe("account");
+    expect(calls.filter((c) => c === `/${ACT}?objective`)).toEqual([]);
+  });
+
+  it("a version prefix is not the node", async () => {
+    expect((await build(post(`/v27.0/${CAMP}`), baseWorld())).object).toEqual({ type: "campaign", id: CAMP, created: false });
+  });
+
+  it("two kinds do not fall through to metadata", async () => {
+    expect(await typeOf({ objective: "X", optimization_goal: "Y", metadata: { type: "adstudy" } })).toBe("other");
+  });
+
+  it("a Page does not fall through to metadata", async () => {
+    expect(await typeOf({ fan_count: 12, metadata: { type: "adstudy" } })).toBe("other");
   });
 });
 
@@ -249,6 +363,40 @@ describe("a post's owner Page (382)", () => {
       vi.unstubAllGlobals();
       cleanupTestToken();
     }
+  });
+
+  it.each([
+    ["another account", { account_id: "9990000000000002" }],
+    ["no account", { account_id: undefined }],
+    ["a null account", { account_id: null }],
+    ["a numeric account", { account_id: 9990000000000001 }],
+    ["an account read that fails", { failing: { account_id: new Error("socket hang up") } }],
+  ])("a creative with %s takes no Page from the prefix", async (_name, account) => {
+    for (const req of [attach, copy]) {
+      const [e] = storyEntries(await build(req, withStory({ effective_object_story_id: STORY, ...account })));
+      expect(e.owner_page).toBeNull();
+    }
+  });
+
+  it("the creative's account must be a string, even when its digits equal the write's account", async () => {
+    const SMALL = "act_123456789";
+    const smallAttach = post(`/${SMALL}/ads`, { name: "n", adset_id: ADSET, creative: { creative_id: CREATIVE } });
+    const world = (account_id: unknown) => ({
+      ...withStory({ effective_object_story_id: STORY, account_id }),
+      [`/${SMALL}`]: { spend_cap: "500000", amount_spent: "0", currency: "USD" },
+    });
+    expect(storyEntries(await build(smallAttach, world("123456789")))[0].owner_page).toBe(PAGE);
+    expect(storyEntries(await build(smallAttach, world(123456789)))[0].owner_page).toBeNull();
+  });
+
+  it("a stored object_story_id with no effective id takes no Page from the prefix", async () => {
+    const [e] = storyEntries(await build(attach, withStory({ object_story_id: STORY })));
+    expect(e).toMatchObject({ id: STORY, owner_page: null });
+  });
+
+  it.each([[null], [false], [[]], ["x"]])("a from{id} read answering the non-object %j stays unresolved", async (body) => {
+    const [e] = storyEntries(await build(attach, withStory({ effective_object_story_id: STORY }, new Raw(body))));
+    expect(e.owner_page).toBeNull();
   });
 
   it("the reported id under another identity field takes no Page from its prefix", async () => {
