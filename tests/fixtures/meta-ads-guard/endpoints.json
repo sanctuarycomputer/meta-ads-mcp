@@ -1,5 +1,5 @@
 {
-  "v": "1.1",
+  "v": "1.2",
   "host_list": [
     "graph.facebook.com",
     "graph-video.facebook.com"
@@ -1290,7 +1290,8 @@
     "creative_sourcing_spec": [
       "site_links_spec.site_link_title",
       "site_links_spec.site_link_url",
-      "site_links_spec.site_link_image_hash"
+      "site_links_spec.site_link_image_hash",
+      "destination_screenshot_spec.enroll_status"
     ]
   },
   "coverage": [

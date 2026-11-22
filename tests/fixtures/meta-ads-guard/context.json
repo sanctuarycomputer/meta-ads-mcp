@@ -1,5 +1,5 @@
 {
-  "v": "1.1",
+  "v": "1.2",
   "note": "The fixtures' shared world (meta-ads-guard.md §13). Every id is made up and starts 999. A fixture's brand_status overrides a brand's status here. Shapes follow design §6.2 (brand map, 250's brands.json is authoritative) and §6.3 (policy).",
   "brands": [
     {

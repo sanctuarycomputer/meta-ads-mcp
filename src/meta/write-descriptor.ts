@@ -1,4 +1,4 @@
-// The meta-ads-guard contract layer (docs/contracts/meta-ads-guard.md@1.1 §2-§6): the descriptor's types, the
+// The meta-ads-guard contract layer (docs/contracts/meta-ads-guard.md@1.2 §2-§6): the descriptor's types, the
 // endpoint table, and the pure derivations the descriptor builder uses. Nothing here reads Graph or the guard.
 // matchEndpoint, deriveKind, deriveAccountLimit, deriveCreativeBearing, hostAllowed and validateDescriptor port the
 // contract's fake guard (tests/fixtures/meta-ads-guard/fake-guard.mjs) line for line; a test holds them equal.
@@ -152,10 +152,10 @@ export interface EndpointTable {
   sub_keys: Readonly<Record<string, readonly string[]>>;
 }
 
-// Contract 1.1's endpoints.json, embedded (coverage left out: it is the guard's, not the fork's). A test holds
+// Contract 1.2's endpoints.json, embedded (coverage left out: it is the guard's, not the fork's). A test holds
 // it equal to the vendored copy; re-vendor and regenerate together.
 export const ENDPOINTS: EndpointTable = {
-  v: "1.1",
+  v: "1.2",
   host_list: ["graph.facebook.com", "graph-video.facebook.com"],
   host_rows: { "graph-video.facebook.com": ["POST /act_{id}/advideos"] },
   read_post: "^/(v\\d+\\.\\d+/)?(act_\\d+|\\d+)/insights$",
@@ -550,7 +550,7 @@ export const ENDPOINTS: EndpointTable = {
     objectives: ["name", "type", "is_primary", "adspixels.id", "adspixels.event_names"],
     creative_asset_groups_spec: ["groups.images.hash", "groups.videos.video_id", "groups.texts.text", "groups.texts.text_type", "groups.call_to_action.type", "groups.call_to_action.value.link"],
     cells: ["name", "treatment_percentage", "control_percentage", "adsets", "campaigns", "id"],
-    creative_sourcing_spec: ["site_links_spec.site_link_title", "site_links_spec.site_link_url", "site_links_spec.site_link_image_hash"],
+    creative_sourcing_spec: ["site_links_spec.site_link_title", "site_links_spec.site_link_url", "site_links_spec.site_link_image_hash", "destination_screenshot_spec.enroll_status"],
   },
 };
 
@@ -742,6 +742,8 @@ export const CREATIVE_READ_FIELDS: string = [
   ...LEFT_OUT_CREATIVE_KEYS,
 ].join(",");
 
+// Contract §3.2 admits a read creative's key that a key set admits: creative_sourcing_spec is in the creative-create
+// set, not the ad-create one CREATIVE_KEYS comes from, and Graph v27 adds it to every new creative (1.2, C20).
 const ADMITTED_CREATIVE_KEYS = new Set([
   ...CREATIVE_KEYS,
   "id",
@@ -749,6 +751,7 @@ const ADMITTED_CREATIVE_KEYS = new Set([
   "effective_object_story_id",
   "actor_id",
   "instagram_actor_id",
+  "creative_sourcing_spec",
 ]);
 
 /** Whether a creative as read holds only keys a key set admits, and bounded objects only their §5.1 paths. */
